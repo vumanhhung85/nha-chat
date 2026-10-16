@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF9A62"/>
+      <stop offset="1" stop-color="#EE5A52"/>
+    </linearGradient>
+    <clipPath id="room">
+      <rect x="132" y="200" width="248" height="160"/>
+    </clipPath>
+  </defs>
+
+  <!-- Nền -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- Ngôi nhà kiêm bong bóng chat (màu trắng) -->
+  <g fill="#FFFFFF" stroke="#FFFFFF" stroke-linejoin="round" stroke-width="28">
+    <polygon points="256,104 114,214 398,214"/>
+  </g>
+  <rect x="118" y="196" width="276" height="182" rx="34" fill="#FFFFFF"/>
+  <!-- Đuôi bong bóng chat -->
+  <path d="M168 360 L150 432 L236 368 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="10" stroke-linejoin="round"/>
+
+  <!-- Trái tim trên mái -->
+  <path d="M256 196 C 238 182, 222 170, 222 154 C 222 142, 231 134, 241 134 C 248 134, 253 138, 256 144 C 259 138, 264 134, 271 134 C 281 134, 290 142, 290 154 C 290 170, 274 182, 256 196 Z" fill="#EE5A52"/>
+
+  <!-- 4 thành viên -->
+  <g clip-path="url(#room)">
+    <!-- Bố -->
+    <circle cx="176" cy="262" r="24" fill="#2F6FDE"/>
+    <rect x="147" y="294" width="58" height="120" rx="29" fill="#2F6FDE"/>
+    <!-- Bé Linh Nhi -->
+    <circle cx="230" cy="296" r="18" fill="#F5A623"/>
+    <rect x="209" y="320" width="42" height="100" rx="21" fill="#F5A623"/>
+    <!-- Bé Phương Thảo -->
+    <circle cx="280" cy="304" r="16" fill="#22B573"/>
+    <rect x="261" y="326" width="38" height="100" rx="19" fill="#22B573"/>
+    <!-- Mẹ -->
+    <circle cx="336" cy="262" r="24" fill="#E8457C"/>
+    <rect x="307" y="294" width="58" height="120" rx="29" fill="#E8457C"/>
+  </g>
+</svg>
