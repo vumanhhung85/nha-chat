@@ -46,6 +46,21 @@ await bo.screenshot({ path: '/tmp/claude-0/shots/call-video-bo.png' });
 await bo.click('#cuMute'); assert.match(await bo.textContent('#cuBtns'), /Bật mic/);
 await bo.click('#cuCam'); assert.match(await bo.textContent('#cuBtns'), /Bật cam/);
 await bo.click('#cuMute'); await bo.click('#cuCam');
+// đổi camera giữa cuộc gọi: hình bên kia vẫn chạy
+const ct0 = await nhi.$eval('#callRv', v => v.currentTime);
+await bo.click('#cuFlip');
+await bo.waitForFunction(() => { const v = document.querySelector('#callLv'); const t = v.srcObject && v.srcObject.getVideoTracks()[0]; return t && t.readyState === 'live'; }, null, { timeout: 5000 });
+await new Promise(r => setTimeout(r, 1500));
+const ct1 = await nhi.$eval('#callRv', v => v.currentTime);
+assert.ok(ct1 > ct0, 'hình vẫn chạy sau khi đổi camera');
+assert.equal(await nhi.$eval('#callRv', v => v.videoWidth > 0), true);
+await bo.click('#cuFlip'); await new Promise(r => setTimeout(r, 800));
+// menu chọn loa
+await bo.click('#cuSpk'); await bo.waitForSelector('#cuMenu', { timeout: 3000 });
+console.log('Menu loa:', (await bo.textContent('#cuMenu')).trim().slice(0, 80));
+await bo.screenshot({ path: '/tmp/claude-0/shots/call-loa.png' });
+const sb = await bo.$('#cuMenu button'); if (sb) { await sb.click(); } else await bo.click('#cuSpk');
+await bo.waitForSelector('#cuMenu', { state: 'detached', timeout: 3000 }).catch(() => {});
 await new Promise(r => setTimeout(r, 1500));
 await nhi.click('#cuEnd');
 await bo.waitForSelector('#callUi.hidden', { state: 'attached', timeout: 6000 });

@@ -143,6 +143,10 @@ a{color:#1F6FD1}
 .cu-b{width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;font-size:28px;display:flex;align-items:center;justify-content:center}
 .cu-b:active{opacity:.8}
 .cu-b.red{background:#E5484D}.cu-b.green{background:#22B573}.cu-b.off{background:#fff;color:#333}
+.cu-menu{position:absolute;left:14px;right:14px;bottom:calc(150px + var(--safe-b));z-index:5;background:#fff;color:#222;border-radius:16px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.4);max-width:420px;margin:0 auto}
+.cu-menu button{display:block;width:100%;padding:14px;font-size:17px;text-align:left;border-radius:10px;color:#222}
+.cu-menu button.on{background:var(--brand-l);font-weight:700}
+.cu-menu p{margin:6px 10px 10px;font-size:14px;color:#555;line-height:1.4}
 .cu-tap{position:absolute;left:0;top:0;right:0;bottom:0;z-index:1;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600}
 
 /* ---------- khung chat ---------- */
@@ -393,7 +397,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.2.0';
+var VERSION = '1.2.1';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -2046,20 +2050,60 @@ function callCam() {
   cl.camOff = !cl.camOff; cl.local.getVideoTracks().forEach(function (t) { t.enabled = !cl.camOff; }); callUi();
 }
 function callFlip() {
-  var cl = call; if (!cl || !cl.video || !cl.pc || cl.flipping) return;
+  var cl = call; if (!cl || !cl.video || !cl.pc || !cl.local || cl.flipping) return;
   cl.flipping = true;
-  var f = cl.facing === 'user' ? 'environment' : 'user';
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 640 }, height: { ideal: 480 } } }).then(function (s) {
-    cl.flipping = false;
-    if (call !== cl) { stopStream(s); return; }
-    var nt = s.getVideoTracks()[0], old = cl.local.getVideoTracks()[0];
-    var snd = cl.pc.getSenders().filter(function (x) { return x.track && x.track.kind === 'video'; })[0];
-    if (snd) snd.replaceTrack(nt);
-    if (old) { cl.local.removeTrack(old); old.stop(); }
-    nt.enabled = !cl.camOff; cl.local.addTrack(nt); cl.facing = f;
-    var lv = $('#callLv'); if (lv) { lv.srcObject = null; lv.srcObject = cl.local; }
-    callUi();
-  }).catch(function () { cl.flipping = false; toast('Không đổi được camera', true); });
+  var want = cl.facing === 'user' ? 'environment' : 'user', got = cl.facing;
+  var old = cl.local.getVideoTracks()[0];
+  if (old) { try { old.stop(); } catch (e) {} cl.local.removeTrack(old); } // nhiều máy chỉ cho mở 1 camera một lúc
+  function open(fm) { return navigator.mediaDevices.getUserMedia({ video: { facingMode: fm, width: { ideal: 640 }, height: { ideal: 480 } } }); }
+  open({ exact: want }).then(function (s2) { got = want; return s2; }, function () {
+    return open(want).then(function (s2) { got = want; return s2; });
+  }).catch(function () { return open(cl.facing); }) // không mở được camera kia → mở lại camera cũ
+    .then(function (s2) {
+      cl.flipping = false;
+      if (call !== cl) { stopStream(s2); return; }
+      var nt = s2.getVideoTracks()[0];
+      var snd = cl.pc.getSenders().filter(function (x) { return x.track && x.track.kind === 'video'; })[0];
+      if (snd) snd.replaceTrack(nt);
+      nt.enabled = !cl.camOff; cl.local.addTrack(nt);
+      if (got === cl.facing && got !== want) toast('Máy này không đổi được camera', true);
+      cl.facing = got;
+      var lv = $('#callLv'); if (lv) { lv.srcObject = null; lv.srcObject = cl.local; var pp = lv.play && lv.play(); if (pp && pp.catch) pp.catch(function () {}); }
+      callUi();
+    }).catch(function () { cl.flipping = false; toast('Không mở lại được camera', true); });
+}
+
+
+/* ----- chọn loa (loa ngoài / loa trong / Bluetooth) ----- */
+function outName(d, i) {
+  var l = d.label || '';
+  if (/bluetooth|buds|airpods|headset|headphone|tai nghe/i.test(l)) return '🎧 ' + l;
+  if (/earpiece|handset|receiver/i.test(l)) return '📞 Loa trong (áp tai)';
+  if (/speaker/i.test(l)) return '🔊 Loa ngoài';
+  if (d.deviceId === 'default') return '🔈 Mặc định của máy' + (l && !/^default/i.test(l) ? ' (' + l + ')' : '');
+  return '🔈 ' + (l || 'Loa ' + (i + 1));
+}
+function callSpeaker() {
+  var root = callRoot(), old = $('#cuMenu');
+  if (old) { old.remove(); return; }
+  var rv = $('#callRv'), canSet = !!(rv && typeof rv.setSinkId === 'function');
+  var done = function (list) {
+    if (!call || $('#cuMenu')) return;
+    var outs = (list || []).filter(function (d) { return d.kind === 'audiooutput'; });
+    var m = document.createElement('div'); m.id = 'cuMenu'; m.className = 'cu-menu';
+    var h = '';
+    if (canSet && outs.length) outs.forEach(function (d, i) { h += '<button data-i="' + i + '" class="' + ((rv.sinkId || 'default') === d.deviceId ? 'on' : '') + '">' + esc(outName(d, i)) + '</button>'; });
+    if (!canSet) h += '<p>Máy này tự chọn loa theo hệ điều hành. Muốn nghe qua loa hoặc tai nghe Bluetooth: kết nối Bluetooth trong Cài đặt của máy, âm thanh sẽ tự chuyển sang.</p>';
+    else if (outs.length <= 1) h += '<p>Chưa thấy loa nào khác. Hãy kết nối Bluetooth rồi bấm lại nút Loa.</p>';
+    m.innerHTML = h; root.appendChild(m);
+    Array.prototype.forEach.call(m.querySelectorAll('button'), function (b) {
+      b.onclick = function () {
+        var d = outs[+b.getAttribute('data-i')];
+        rv.setSinkId(d.deviceId).then(function () { m.remove(); toast('Đã chuyển âm thanh'); }, function () { toast('Máy không cho đổi loa này', true); });
+      };
+    });
+  };
+  navigator.mediaDevices.enumerateDevices().then(done, function () { done([]); });
 }
 
 /* ----- giao diện ----- */
@@ -2076,7 +2120,7 @@ function callRoot() {
 function callBtn(cls, ico, label, id) { return '<div class="cu-w"><button class="cu-b ' + cls + '" id="' + id + '" aria-label="' + label + '">' + ico + '</button><span>' + label + '</span></div>'; }
 function callUi(tickOnly) {
   var el = callRoot(), cl = call;
-  if (!cl) { el.classList.add('hidden'); var t0 = $('#cuTap'); if (t0) t0.remove(); return; }
+  if (!cl) { el.classList.add('hidden'); var t0 = $('#cuTap'), t1 = $('#cuMenu'); if (t0) t0.remove(); if (t1) t1.remove(); return; }
   el.classList.remove('hidden');
   var st = $('#cuSt');
   var txt = cl.st === 'prep' ? 'Đang chuẩn bị…' : cl.st === 'calling' ? 'Đang đổ chuông…' : cl.st === 'ringing' ? (cl.video ? 'Cuộc gọi video đến' : 'Cuộc gọi thoại đến')
@@ -2096,7 +2140,7 @@ function callUi(tickOnly) {
   var h = '';
   if (cl.st === 'ringing') h = callBtn('red', '✖', 'Từ chối', 'cuNo') + callBtn('green', cl.video ? '🎥' : '📞', 'Nghe', 'cuYes');
   else if (cl.st === 'connected') {
-    h = callBtn(cl.muted ? 'off' : '', cl.muted ? '🔇' : '🎤', cl.muted ? 'Bật mic' : 'Tắt mic', 'cuMute');
+    h = callBtn(cl.muted ? 'off' : '', cl.muted ? '🔇' : '🎤', cl.muted ? 'Bật mic' : 'Tắt mic', 'cuMute') + callBtn('', '🔊', 'Loa', 'cuSpk');
     if (cl.video) h += callBtn(cl.camOff ? 'off' : '', '📷', cl.camOff ? 'Bật cam' : 'Tắt cam', 'cuCam') + callBtn('', '🔄', 'Đổi cam', 'cuFlip');
     h += callBtn('red', '✖', 'Kết thúc', 'cuEnd');
   } else h = callBtn('red', '✖', cl.st === 'connecting' ? 'Kết thúc' : 'Hủy', 'cuEnd');
@@ -2105,7 +2149,7 @@ function callUi(tickOnly) {
   q('cuNo', function () { callEnd(); });
   q('cuYes', callAccept);
   q('cuEnd', function () { callEnd(); });
-  q('cuMute', callMute); q('cuCam', callCam); q('cuFlip', callFlip);
+  q('cuSpk', callSpeaker); q('cuMute', callMute); q('cuCam', callCam); q('cuFlip', callFlip);
   var tap = $('#cuTap');
   if (cl.needTap && !tap) {
     tap = document.createElement('div'); tap.id = 'cuTap'; tap.className = 'cu-tap'; tap.textContent = 'Chạm để bật tiếng';
