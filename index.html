@@ -397,7 +397,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.2.1';
+var VERSION = '1.2.2';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -2009,6 +2009,7 @@ function applySdp(cl, sdp) {
 function callConnected(cl) {
   cl.st = 'connected'; cl.lost = false; cl.t0 = Date.now(); ringStop(); clearTimeout(cl.fail); clearTimeout(cl.to);
   clearInterval(callTick); callTick = setInterval(function () { if (call) callUi(true); }, 1000);
+  callAutoRoute();
   try { if (navigator.wakeLock && navigator.wakeLock.request) navigator.wakeLock.request('screen').then(function (w) { wakeLock = w; }, function () {}); } catch (e) {}
   callUi();
 }
@@ -2074,6 +2075,23 @@ function callFlip() {
 }
 
 
+
+/* mặc định: gọi thoại → loa Bluetooth (nếu có) hoặc loa trong; gọi video → loa ngoài. Người dùng chọn tay thì giữ nguyên lựa chọn đó */
+function callAutoRoute() {
+  var cl = call, rv = $('#callRv');
+  if (!cl || cl.spkManual || !rv || typeof rv.setSinkId !== 'function' || !navigator.mediaDevices.enumerateDevices) return;
+  navigator.mediaDevices.enumerateDevices().then(function (list) {
+    if (call !== cl || cl.spkManual) return;
+    var outs = list.filter(function (d) { return d.kind === 'audiooutput'; });
+    var find = function (re, not) { return outs.filter(function (d) { var l = d.label || ''; return re.test(l) && !(not && not.test(l)); })[0]; };
+    var bt = find(/bluetooth|buds|airpods|headset|headphone|tai nghe/i);
+    var pick = cl.video ? find(/speaker/i, /bluetooth|headset|earpiece|handset|receiver/i)
+      : (bt || find(/earpiece|handset|receiver/i));
+    if (pick && rv.sinkId !== pick.deviceId) rv.setSinkId(pick.deviceId).catch(function () {});
+  }).catch(function () {});
+}
+try { if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', function () { if (call && call.st === 'connected') callAutoRoute(); }); } catch (e) {}
+
 /* ----- chọn loa (loa ngoài / loa trong / Bluetooth) ----- */
 function outName(d, i) {
   var l = d.label || '';
@@ -2099,6 +2117,7 @@ function callSpeaker() {
     Array.prototype.forEach.call(m.querySelectorAll('button'), function (b) {
       b.onclick = function () {
         var d = outs[+b.getAttribute('data-i')];
+        if (call) call.spkManual = true;
         rv.setSinkId(d.deviceId).then(function () { m.remove(); toast('Đã chuyển âm thanh'); }, function () { toast('Máy không cho đổi loa này', true); });
       };
     });
