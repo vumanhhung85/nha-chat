@@ -122,6 +122,29 @@ a{color:#1F6FD1}
 .odot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-left:6px;vertical-align:middle}
 .sec-t{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:16px 16px 6px}
 
+
+/* ---------- gọi thoại / video ---------- */
+.callui{position:fixed;left:0;top:0;right:0;bottom:0;z-index:100;background:linear-gradient(160deg,#2b1a14,#4a2a1d 55%,#1d1411);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:calc(28px + var(--safe-t)) 20px calc(30px + var(--safe-b));overflow:hidden}
+.callui.hidden{display:none}
+#callRv{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;background:#000;opacity:0;pointer-events:none}
+.callui.vid-on #callRv{opacity:1}
+#callLv{position:absolute;right:14px;top:calc(14px + var(--safe-t));width:104px;height:140px;object-fit:cover;border-radius:14px;border:2px solid rgba(255,255,255,.55);background:#000;display:none;z-index:3}
+#callLv.on{display:block}
+#callLv.mirror{transform:scaleX(-1)}
+.cu-top{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:10px;margin-top:6vh;text-align:center}
+.cu-av .av{width:120px;height:120px;font-size:64px;border-width:4px}
+.cu-name{font-size:26px;font-weight:700}
+.cu-st{font-size:17px;opacity:.85}
+.callui.vid-on .cu-top{position:absolute;left:16px;top:calc(14px + var(--safe-t));margin:0;align-items:flex-start;text-align:left;text-shadow:0 1px 5px rgba(0,0,0,.7)}
+.callui.vid-on .cu-av{display:none}
+.callui.vid-on .cu-name{font-size:20px}
+.cu-btns{position:relative;z-index:2;margin-top:auto;display:flex;gap:20px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+.cu-w{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:13px;min-width:72px;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.cu-b{width:68px;height:68px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;font-size:28px;display:flex;align-items:center;justify-content:center}
+.cu-b:active{opacity:.8}
+.cu-b.red{background:#E5484D}.cu-b.green{background:#22B573}.cu-b.off{background:#fff;color:#333}
+.cu-tap{position:absolute;left:0;top:0;right:0;bottom:0;z-index:1;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600}
+
 /* ---------- khung chat ---------- */
 .chat-h{display:flex;align-items:center;gap:10px;padding:calc(10px + var(--safe-t)) 12px 10px;background:var(--panel);border-bottom:1px solid var(--line);min-height:62px}
 .chat-h .back{width:40px;height:40px;border-radius:50%;font-size:26px;display:none;align-items:center;justify-content:center;color:var(--brand-d)}
@@ -370,7 +393,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.1.0';
+var VERSION = '1.2.0';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -742,11 +765,13 @@ function openConv(id, keep) {
   $('#main').innerHTML =
     '<div class="chat-h"><button class="back" id="cBack">‹</button>' + convAvatar(c) +
     '<div class="t"><b>' + esc(convName(c)) + '</b><small id="cSub">' + chatSub(c) + '</small></div>' +
+    (c.type === 'direct' && callSupported() ? '<button class="icon-btn" id="cCall" title="Gọi thoại" aria-label="Gọi thoại">📞</button><button class="icon-btn" id="cVid" title="Gọi video" aria-label="Gọi video">🎥</button>' : '') +
     '<button class="icon-btn" id="cHw" title="Bài tập">📚</button></div>' +
     '<button class="pinbar hidden" id="pinBar"></button>' +
     '<div class="msgs" id="msgs"><div class="empty">Đang tải tin nhắn…</div></div>' +
     '<div class="composer" id="composer"></div>';
   $('#cBack').onclick = closeConv;
+  if ($('#cCall')) { $('#cCall').onclick = function () { startCall(id, false); }; $('#cVid').onclick = function () { startCall(id, true); }; }
   $('#cHw').onclick = function () { setTab('hw'); if (window.innerWidth < 760) closeConv(); };
   listEl = $('#msgs');
   listEl.addEventListener('scroll', onMsgsScroll);
@@ -1056,6 +1081,7 @@ function wsConnect() {
       try { w.send('ping'); } catch (e) {}
     }, 25000);
     doSync();
+    callOnWsOpen();
   };
   w.onmessage = function (e) {
     wsLastRx = Date.now();
@@ -1064,6 +1090,8 @@ function wsConnect() {
     if (d.t === 'rev') { if (!(d.rev <= S.rev)) doSync(); }
     else if (d.t === 'hello' || d.t === 'presence') { S.online = d.online || []; presenceChanged(); }
     else if (d.t === 'typing') setTyping(d.conv, d.m);
+    else if (d.t === 'call') callOnEvent(d);
+    else if (d.t === 'sig') callOnSig(d);
   };
   w.onclose = function () {
     if (ws !== w) return;
@@ -1107,7 +1135,7 @@ function chatSub(c) {
 function updateChatSub() { var el = $('#cSub'), c = curConv(); if (el && c) el.innerHTML = chatSub(c); }
 function refreshAll() { renderMeBar(); setTab(S.tab); if (S.cur) openConv(S.cur, true); }
 document.addEventListener('visibilitychange', function () {
-  if (document.hidden) stopPoll();
+  if (document.hidden) { if (!call) stopPoll(); }
   else if (token && S.me) { pollFail = 0; schedulePoll(0); wsConnect(); }
 });
 window.addEventListener('online', function () { if (token && S.me) { pollFail = 0; schedulePoll(0); wsFail = 0; wsConnect(); } });
@@ -1798,15 +1826,306 @@ function pushCardInit() {
   });
 }
 
+
+/* =========================================================
+   Gọi thoại / video 1-1 (WebRTC) — máy chủ chỉ báo hiệu, hình/tiếng đi thẳng giữa 2 máy
+   ========================================================= */
+var call = null, iceCfg = null, iceAt = 0, actx = null, ringT = null, wakeLock = null, callTick = null;
+function callSupported() { return !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext !== false); }
+function audioCtx() {
+  try {
+    if (!actx) { var AC = window.AudioContext || window.webkitAudioContext; if (AC) actx = new AC(); }
+    if (actx && actx.state === 'suspended') actx.resume();
+  } catch (e) {}
+  return actx;
+}
+['pointerdown', 'touchend', 'keydown'].forEach(function (ev) { document.addEventListener(ev, function () { audioCtx(); }, { passive: true }); });
+function beep(freq, ms, vol) {
+  var a = audioCtx(); if (!a) return;
+  try {
+    var o = a.createOscillator(), g = a.createGain(), t = a.currentTime;
+    o.type = 'sine'; o.frequency.value = freq; o.connect(g); g.connect(a.destination);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);
+    o.start(t); o.stop(t + ms / 1000 + 0.03);
+  } catch (e) {}
+}
+function ringStart(kind) {
+  ringStop();
+  function tick() {
+    if (kind === 'in') { beep(880, 350, 0.3); setTimeout(function () { beep(660, 350, 0.3); }, 420); try { if (navigator.vibrate) navigator.vibrate([400, 200, 400]); } catch (e) {} }
+    else beep(440, 900, 0.12);
+  }
+  tick(); ringT = setInterval(tick, kind === 'in' ? 2200 : 3500);
+}
+function ringStop() { clearInterval(ringT); ringT = null; try { if (navigator.vibrate) navigator.vibrate(0); } catch (e) {} }
+
+function getIce() {
+  if (iceCfg && Date.now() - iceAt < 3600000) return Promise.resolve(iceCfg);
+  return api('/api/call/ice').then(function (d) { iceCfg = d; iceAt = Date.now(); return d; },
+    function () { return iceCfg || { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], turn: false }; });
+}
+function getMedia(video, facing) {
+  return navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: video ? { facingMode: facing || 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } } : false
+  });
+}
+function stopStream(s) { try { if (s) s.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+function mediaErr(e) {
+  var n = e && e.name;
+  if (n === 'NotAllowedError' || n === 'SecurityError') return 'Hãy cho phép dùng micro' + (call && call.video ? ' và camera' : '') + ' cho Nhà Mình (trong cài đặt trình duyệt)';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'Máy không có micro/camera phù hợp';
+  if (n === 'NotReadableError') return 'Micro/camera đang được app khác dùng';
+  return (e && e.message) || 'Không bắt đầu được cuộc gọi';
+}
+function wsSend(o) { if (ws && wsOpen) { try { ws.send(JSON.stringify(o)); return true; } catch (e) {} } return false; }
+function sigSend(cl, d) {
+  var o = { t: 'sig', to: cl.peer, cid: cl.cid, d: d };
+  if (!wsSend(o)) (cl.out = cl.out || []).push(o);
+}
+function callOnWsOpen() {
+  if (call && call.out && call.out.length) { var q = call.out; call.out = []; q.forEach(function (o) { wsSend(o) || call.out.push(o); }); }
+  callCheckPending();
+}
+function callCheckPending() {
+  if (!token || !S.me || call) return;
+  api('/api/call/pending').then(function (d) { if (d.call && !call) callIncoming(d.call); }).catch(function () {});
+}
+
+/* ----- gọi đi ----- */
+function startCall(conv, video) {
+  if (call) { toast('Đang trong một cuộc gọi', true); return; }
+  if (!callSupported()) { toast('Máy này chưa hỗ trợ gọi', true); return; }
+  if (!wsOpen) { toast('Đang kết nối… thử lại sau vài giây', true); wsConnect(); return; }
+  var c = S.convs[conv]; if (!c || c.type !== 'direct') return;
+  var cl = call = { cid: null, peer: otherOf(c), conv: conv, video: !!video, role: 'caller', st: 'prep', buf: [], out: [], facing: 'user' };
+  audioCtx(); callUi();
+  Promise.all([getMedia(!!video), getIce()]).then(function (r) {
+    if (call !== cl) { stopStream(r[0]); return; }
+    cl.local = r[0]; cl.ice = r[1]; callUi();
+    return api('/api/call/invite', { body: { conv: conv, video: !!video } }).then(function (d) {
+      if (call !== cl) { api('/api/call/end', { body: { cid: d.cid } }).catch(function () {}); return; }
+      cl.cid = d.cid; cl.st = 'calling'; callUi(); ringStart('out');
+      cl.to = setTimeout(function () { if (call === cl && cl.st === 'calling') callEnd('timeout'); }, 45000);
+    });
+  }).catch(function (e) {
+    if (call !== cl) return;
+    var msg = e && e.code === 'busy' ? e.message : (e && e.name ? mediaErr(e) : (e && e.message) || 'Không gọi được');
+    callCleanup(); toast(msg, true);
+  });
+}
+
+/* ----- gọi đến ----- */
+function callIncoming(d) {
+  if (call) return;
+  var cl = call = { cid: d.cid, peer: d.from, conv: d.conv, video: !!d.video, role: 'callee', st: 'ringing', buf: [], out: [], facing: 'user' };
+  callUi(); ringStart('in');
+  cl.to = setTimeout(function () { if (call === cl && cl.st === 'ringing') { callCleanup(); toast('Bạn có cuộc gọi nhỡ'); } }, 46000);
+}
+function callAccept() {
+  var cl = call; if (!cl || cl.st !== 'ringing') return;
+  cl.st = 'connecting'; ringStop(); clearTimeout(cl.to); audioCtx(); callUi();
+  Promise.all([getMedia(cl.video), getIce()]).then(function (r) {
+    if (call !== cl) { stopStream(r[0]); return; }
+    cl.local = r[0]; cl.ice = r[1]; makePc(cl); callUi();
+    return api('/api/call/state', { body: { cid: cl.cid, state: 'answered' } });
+  }).catch(function (e) {
+    if (call !== cl) return;
+    var ended = e && e.code === 'ended';
+    if (!ended) api('/api/call/end', { body: { cid: cl.cid } }).catch(function () {});
+    callCleanup(); toast(ended ? 'Cuộc gọi đã kết thúc' : (e && e.name ? mediaErr(e) : (e && e.message) || 'Không nghe được máy'), true);
+  });
+}
+
+/* ----- kết nối WebRTC ----- */
+function makePc(cl) {
+  var pc = new RTCPeerConnection({ iceServers: cl.ice.iceServers });
+  cl.pc = pc; cl.remote = new MediaStream();
+  cl.local.getTracks().forEach(function (t) { pc.addTrack(t, cl.local); });
+  pc.ontrack = function (ev) {
+    if (ev.streams && ev.streams[0]) cl.remote = ev.streams[0]; else cl.remote.addTrack(ev.track);
+    attachRemote(cl);
+  };
+  pc.onicecandidate = function (ev) { if (ev.candidate) sigSend(cl, { ice: ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate }); };
+  pc.oniceconnectionstatechange = function () {
+    if (call !== cl) return;
+    var s = pc.iceConnectionState;
+    if (s === 'connected' || s === 'completed') { clearTimeout(cl.dc); if (cl.st !== 'connected') callConnected(cl); else { cl.lost = false; callUi(); } }
+    else if (s === 'disconnected') { cl.lost = true; callUi(); clearTimeout(cl.dc); cl.dc = setTimeout(function () { if (call === cl && cl.lost) callEnd('lost'); }, 12000); }
+    else if (s === 'failed') callEnd('lost');
+  };
+  cl.fail = setTimeout(function () { if (call === cl && cl.st === 'connecting') callEnd('lost'); }, 30000);
+  if (cl.pendingSdp) { var ps = cl.pendingSdp; cl.pendingSdp = null; applySdp(cl, ps); }
+}
+function attachRemote(cl) {
+  var rv = $('#callRv'); if (!rv || call !== cl) return;
+  if (rv.srcObject !== cl.remote) rv.srcObject = cl.remote;
+  rv.onplaying = function () { if (cl.needTap) { cl.needTap = false; callUi(); } };
+  var p = rv.play && rv.play();
+  if (p && p.catch) p.catch(function (e) { if (e && e.name === 'NotAllowedError') { cl.needTap = true; callUi(); } });
+  callUi();
+}
+function callOnEvent(d) {
+  if (d.k === 'invite') { if (!call) callIncoming({ cid: d.cid, conv: d.conv, from: d.from, video: d.video }); return; }
+  var cl = call; if (!cl || cl.cid !== d.cid) return;
+  if (d.k === 'accepted' && cl.role === 'caller' && cl.st === 'calling') {
+    cl.st = 'connecting'; ringStop(); clearTimeout(cl.to); callUi();
+    makePc(cl);
+    cl.pc.createOffer().then(function (o) { return cl.pc.setLocalDescription(o); })
+      .then(function () { sigSend(cl, { sdp: { type: cl.pc.localDescription.type, sdp: cl.pc.localDescription.sdp } }); })
+      .catch(function () { if (call === cl) callEnd('lost'); });
+  } else if (d.k === 'declined') { callCleanup(); toast(M(cl.peer).name + ' đã từ chối cuộc gọi'); }
+  else if (d.k === 'ended') { var was = cl.st; callCleanup(); toast(was === 'ringing' ? 'Bạn có cuộc gọi nhỡ' : 'Cuộc gọi đã kết thúc'); }
+  else if (d.k === 'taken' && cl.st === 'ringing') callCleanup();
+}
+function flushIce(cl) {
+  var b = cl.buf; cl.buf = [];
+  b.forEach(function (c) { try { cl.pc.addIceCandidate(c).catch(function () {}); } catch (e) {} });
+}
+function callOnSig(m) {
+  var cl = call; if (!cl || cl.cid !== m.cid || m.from !== cl.peer) return;
+  var d = m.d || {};
+  if (d.ice) {
+    if (cl.pc && cl.pc.remoteDescription) { try { cl.pc.addIceCandidate(d.ice).catch(function () {}); } catch (e) {} } else cl.buf.push(d.ice);
+  } else if (d.sdp) {
+    if (!cl.pc) { cl.pendingSdp = d.sdp; return; }
+    applySdp(cl, d.sdp);
+  }
+}
+function applySdp(cl, sdp) {
+  var pc = cl.pc;
+  pc.setRemoteDescription(sdp).then(function () {
+    flushIce(cl);
+    if (sdp.type === 'offer') {
+      return pc.createAnswer().then(function (a) { return pc.setLocalDescription(a); })
+        .then(function () { sigSend(cl, { sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }); });
+    }
+  }).catch(function () { if (call === cl) callEnd('lost'); });
+}
+function callConnected(cl) {
+  cl.st = 'connected'; cl.lost = false; cl.t0 = Date.now(); ringStop(); clearTimeout(cl.fail); clearTimeout(cl.to);
+  clearInterval(callTick); callTick = setInterval(function () { if (call) callUi(true); }, 1000);
+  try { if (navigator.wakeLock && navigator.wakeLock.request) navigator.wakeLock.request('screen').then(function (w) { wakeLock = w; }, function () {}); } catch (e) {}
+  callUi();
+}
+
+/* ----- kết thúc ----- */
+function callEnd(reason) {
+  var cl = call; if (!cl) return;
+  if (cl.cid) api('/api/call/end', { body: { cid: cl.cid } }).catch(function () {});
+  callCleanup();
+  if (reason === 'timeout') toast('Không ai nghe máy');
+  else if (reason === 'lost') toast('Mất kết nối cuộc gọi', true);
+}
+function callCleanup() {
+  var cl = call; call = null;
+  ringStop(); clearInterval(callTick); callTick = null;
+  if (cl) {
+    clearTimeout(cl.to); clearTimeout(cl.dc); clearTimeout(cl.fail);
+    stopStream(cl.local);
+    if (cl.pc) { try { cl.pc.oniceconnectionstatechange = cl.pc.ontrack = cl.pc.onicecandidate = null; cl.pc.close(); } catch (e) {} }
+  }
+  try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {}
+  var rv = $('#callRv'), lv = $('#callLv');
+  if (rv) rv.srcObject = null;
+  if (lv) lv.srcObject = null;
+  callUi();
+}
+window.addEventListener('pagehide', function () {
+  var cl = call;
+  if (cl && cl.cid && token) { try { fetch(API + '/api/call/end', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ cid: cl.cid }) }); } catch (e) {} }
+});
+
+/* ----- điều khiển ----- */
+function callMute() {
+  var cl = call; if (!cl || !cl.local) return;
+  cl.muted = !cl.muted; cl.local.getAudioTracks().forEach(function (t) { t.enabled = !cl.muted; }); callUi();
+}
+function callCam() {
+  var cl = call; if (!cl || !cl.local) return;
+  cl.camOff = !cl.camOff; cl.local.getVideoTracks().forEach(function (t) { t.enabled = !cl.camOff; }); callUi();
+}
+function callFlip() {
+  var cl = call; if (!cl || !cl.video || !cl.pc || cl.flipping) return;
+  cl.flipping = true;
+  var f = cl.facing === 'user' ? 'environment' : 'user';
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 640 }, height: { ideal: 480 } } }).then(function (s) {
+    cl.flipping = false;
+    if (call !== cl) { stopStream(s); return; }
+    var nt = s.getVideoTracks()[0], old = cl.local.getVideoTracks()[0];
+    var snd = cl.pc.getSenders().filter(function (x) { return x.track && x.track.kind === 'video'; })[0];
+    if (snd) snd.replaceTrack(nt);
+    if (old) { cl.local.removeTrack(old); old.stop(); }
+    nt.enabled = !cl.camOff; cl.local.addTrack(nt); cl.facing = f;
+    var lv = $('#callLv'); if (lv) { lv.srcObject = null; lv.srcObject = cl.local; }
+    callUi();
+  }).catch(function () { cl.flipping = false; toast('Không đổi được camera', true); });
+}
+
+/* ----- giao diện ----- */
+function callRoot() {
+  var el = $('#callUi');
+  if (el) return el;
+  el = document.createElement('div'); el.id = 'callUi'; el.className = 'callui hidden';
+  el.innerHTML = '<video id="callRv" playsinline autoplay></video><video id="callLv" playsinline autoplay muted></video>' +
+    '<div class="cu-top"><div class="cu-av" id="cuAv"></div><div class="cu-name" id="cuName"></div><div class="cu-st" id="cuSt"></div></div>' +
+    '<div class="cu-btns" id="cuBtns"></div>';
+  document.body.appendChild(el);
+  return el;
+}
+function callBtn(cls, ico, label, id) { return '<div class="cu-w"><button class="cu-b ' + cls + '" id="' + id + '" aria-label="' + label + '">' + ico + '</button><span>' + label + '</span></div>'; }
+function callUi(tickOnly) {
+  var el = callRoot(), cl = call;
+  if (!cl) { el.classList.add('hidden'); var t0 = $('#cuTap'); if (t0) t0.remove(); return; }
+  el.classList.remove('hidden');
+  var st = $('#cuSt');
+  var txt = cl.st === 'prep' ? 'Đang chuẩn bị…' : cl.st === 'calling' ? 'Đang đổ chuông…' : cl.st === 'ringing' ? (cl.video ? 'Cuộc gọi video đến' : 'Cuộc gọi thoại đến')
+    : cl.st === 'connecting' ? 'Đang kết nối…' : (cl.lost ? 'Đang kết nối lại…' : fmtDur((Date.now() - cl.t0) / 1000));
+  if (st) st.textContent = txt;
+  if (tickOnly) return;
+  $('#cuName').textContent = M(cl.peer).name;
+  $('#cuAv').innerHTML = avatar(cl.peer, 'lg');
+  var vidOn = cl.video && cl.st === 'connected';
+  el.classList.toggle('vid-on', !!vidOn);
+  var lv = $('#callLv');
+  if (lv) {
+    var showLv = cl.video && !!cl.local;
+    lv.classList.toggle('on', showLv); lv.classList.toggle('mirror', cl.facing === 'user');
+    if (showLv && lv.srcObject !== cl.local) { lv.srcObject = cl.local; var pp = lv.play && lv.play(); if (pp && pp.catch) pp.catch(function () {}); }
+  }
+  var h = '';
+  if (cl.st === 'ringing') h = callBtn('red', '✖', 'Từ chối', 'cuNo') + callBtn('green', cl.video ? '🎥' : '📞', 'Nghe', 'cuYes');
+  else if (cl.st === 'connected') {
+    h = callBtn(cl.muted ? 'off' : '', cl.muted ? '🔇' : '🎤', cl.muted ? 'Bật mic' : 'Tắt mic', 'cuMute');
+    if (cl.video) h += callBtn(cl.camOff ? 'off' : '', '📷', cl.camOff ? 'Bật cam' : 'Tắt cam', 'cuCam') + callBtn('', '🔄', 'Đổi cam', 'cuFlip');
+    h += callBtn('red', '✖', 'Kết thúc', 'cuEnd');
+  } else h = callBtn('red', '✖', cl.st === 'connecting' ? 'Kết thúc' : 'Hủy', 'cuEnd');
+  var b = $('#cuBtns'); b.innerHTML = h;
+  var q = function (i, f) { var x = $('#' + i); if (x) x.onclick = f; };
+  q('cuNo', function () { callEnd(); });
+  q('cuYes', callAccept);
+  q('cuEnd', function () { callEnd(); });
+  q('cuMute', callMute); q('cuCam', callCam); q('cuFlip', callFlip);
+  var tap = $('#cuTap');
+  if (cl.needTap && !tap) {
+    tap = document.createElement('div'); tap.id = 'cuTap'; tap.className = 'cu-tap'; tap.textContent = 'Chạm để bật tiếng';
+    tap.onclick = function () { var r = $('#callRv'); if (r) r.play(); cl.needTap = false; tap.remove(); };
+    el.insertBefore(tap, $('#cuBtns'));
+  } else if (!cl.needTap && tap) tap.remove();
+}
+
 /* ---------- mở thẳng cuộc trò chuyện từ thông báo ---------- */
 function checkDeepLink() {
   var m = /[?&]c=([\w-]+)/.exec(location.search); if (!m) return;
+  var hasCall = /[?&]call=/.test(location.search);
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
   if (S.convs[m[1]]) openConv(m[1]);
+  if (hasCall) callCheckPending();
 }
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', function (e) {
     var d = e.data; if (d && d.t === 'open' && S.me && S.convs[d.conv]) { setTab('chats'); openConv(d.conv); }
+    if (d && d.t === 'open' && d.call && S.me) callCheckPending();
   });
 }
 

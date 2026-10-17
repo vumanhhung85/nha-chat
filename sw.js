@@ -2,7 +2,7 @@
    - Lưu sẵn giao diện để mở app nhanh
    - Nhận nội dung "Chia sẻ" từ app khác trên Android (share target)
    - Thông báo đẩy (Web Push): hiện thông báo, bấm vào thì mở đúng cuộc trò chuyện */
-var CACHE = 'nha-shell-v2';
+var CACHE = 'nha-shell-v3';
 var SHELL = ['./', 'index.html', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 
 self.addEventListener('install', function (e) {
@@ -61,15 +61,17 @@ self.addEventListener('push', function (e) {
   var d = {};
   try { d = e.data ? e.data.json() : {}; } catch (x) { d = { body: e.data ? e.data.text() : '' }; }
   var scope = self.registration.scope;
-  var jobs = [self.registration.showNotification(d.title || 'Nhà Mình', {
+  var opt = {
     body: d.body || '',
     tag: d.tag || 'nha',
     renotify: true,
     lang: 'vi',
     icon: new URL('icons/icon-192.png', scope).href,
     badge: new URL('icons/favicon-32.png', scope).href,
-    data: { conv: d.conv || '', msg: d.msg || 0 }
-  })];
+    data: { conv: d.conv || '', msg: d.msg || 0, call: d.call || '' }
+  };
+  if (d.call) { opt.requireInteraction = true; opt.vibrate = [500, 250, 500, 250, 500, 250, 500]; }
+  var jobs = [self.registration.showNotification(d.title || 'Nhà Mình', opt)];
   try { if (typeof d.badge === 'number' && self.navigator && self.navigator.setAppBadge) jobs.push(self.navigator.setAppBadge(d.badge).catch(function () {})); } catch (x) {}
   e.waitUntil(Promise.all(jobs));
 });
@@ -77,14 +79,15 @@ self.addEventListener('push', function (e) {
 self.addEventListener('notificationclick', function (e) {
   e.notification.close();
   var conv = (e.notification.data && e.notification.data.conv) || '';
+  var call = (e.notification.data && e.notification.data.call) || '';
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
     for (var i = 0; i < list.length; i++) {
       var c = list[i];
       if (c.url.indexOf(self.registration.scope) === 0 && 'focus' in c) {
-        if (conv) c.postMessage({ t: 'open', conv: conv });
+        if (conv || call) c.postMessage({ t: 'open', conv: conv, call: call });
         return c.focus();
       }
     }
-    return self.clients.openWindow(self.registration.scope + (conv ? '?c=' + encodeURIComponent(conv) : ''));
+    return self.clients.openWindow(self.registration.scope + (conv ? '?c=' + encodeURIComponent(conv) + (call ? '&call=' + encodeURIComponent(call) : '') : ''));
   }));
 });
