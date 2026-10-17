@@ -397,7 +397,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.2.2';
+var VERSION = '1.3.0';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -672,12 +672,69 @@ function setupPrompt(id) {
   };
 }
 
+
+/* =========================================================
+   Bộ nhớ đệm trên máy (IndexedDB) — mở app là có tin cũ ngay, chỉ tải phần mới
+   ========================================================= */
+var CACHE_MSG_MAX_AGE = 3 * 86400000; // link file ký có hạn ~7 ngày → bỏ tin đệm cũ hơn 3 ngày
+var cacheDb = null, cacheMem = null, cacheT = null;
+function cacheOpen() {
+  if (cacheDb) return cacheDb;
+  cacheDb = new Promise(function (res) {
+    try {
+      var rq = indexedDB.open('nha_cache', 1);
+      rq.onupgradeneeded = function () { rq.result.createObjectStore('kv'); };
+      rq.onsuccess = function () { res(rq.result); };
+      rq.onerror = rq.onblocked = function () { res(null); };
+    } catch (e) { res(null); }
+  });
+  return cacheDb;
+}
+function cacheGet() {
+  return cacheOpen().then(function (db) {
+    if (!db) return cacheMem;
+    return new Promise(function (res) {
+      try { var r = db.transaction('kv').objectStore('kv').get('snap'); r.onsuccess = function () { res(r.result || null); }; r.onerror = function () { res(null); }; }
+      catch (e) { res(null); }
+    });
+  });
+}
+function cachePut(v) {
+  cacheMem = v;
+  return cacheOpen().then(function (db) {
+    if (!db) return;
+    try {
+      var tx = db.transaction('kv', 'readwrite');
+      if (v == null) tx.objectStore('kv').delete('snap'); else tx.objectStore('kv').put(v, 'snap');
+    } catch (e) {}
+  });
+}
+function tokTag() { return token ? token.slice(-10) : ''; }
+function cacheSave() {
+  clearTimeout(cacheT); cacheT = null;
+  if (!token || !S.me || !S.convs) return;
+  try {
+    var boxes = {};
+    Object.keys(S.msgs).forEach(function (id) {
+      var b = S.msgs[id];
+      if (!b || !b.loaded || !b.fetchedAt) return;
+      boxes[id] = { fetchedAt: b.fetchedAt, more: b.list.length > 40 ? true : b.more, list: b.list.slice(-40) };
+    });
+    cachePut({ tag: tokTag(), me: S.me, rev: S.rev, members: S.memberList, convs: S.convs, boxes: boxes, savedAt: Date.now() });
+  } catch (e) {}
+}
+function cacheSoon() { if (cacheT) return; cacheT = setTimeout(cacheSave, 1200); }
+function cacheClear() { clearTimeout(cacheT); cacheT = null; cacheMem = null; cachePut(null); }
+document.addEventListener('visibilitychange', function () { if (document.hidden) cacheSave(); });
+window.addEventListener('pagehide', cacheSave);
+
 function loginDone(t) { token = t; lsSet('nha_token', t); closeSheet(); enterMain(); }
 
 function logout(expired) {
   if (token) pushDetach(token);
   if (!expired && token) api('/api/logout', { method: 'POST' }).catch(function () {});
   token = null; lsSet('nha_token', null);
+  cacheClear();
   stopPoll();
   S.msgs = {}; S.cur = null; S.convs = {};
   showLogin();
@@ -690,16 +747,40 @@ function logout(expired) {
 function enterMain() {
   show('scrMain');
   $('#panel').innerHTML = '<div class="empty">Đang tải…</div>';
-  api('/api/bootstrap').then(function (d) {
-    applyBoot(d);
+  var done = false;
+  function afterBoot() {
     renderMeBar(); setTab(S.tab);
     if (S.cur && S.convs[S.cur]) openConv(S.cur, true);
     startPoll();
     checkShare();
     checkDeepLink();
     pushResync();
+  }
+  function fromNet() {
+    return api('/api/bootstrap').then(function (d) {
+      if (done) return;
+      done = true;
+      applyBoot(d);
+      afterBoot();
+      cacheSoon();
+    });
+  }
+  cacheGet().then(function (c) {
+    if (!c || c.tag !== tokTag() || !c.convs || !c.members || !c.me) return fromNet();
+    // dựng ngay từ bộ nhớ đệm, rồi chỉ xin phần thay đổi từ rev đã lưu
+    done = true;
+    S.me = c.me; S.rev = c.rev; setMembers(c.members); S.convs = c.convs; S.msgs = {};
+    var now = Date.now();
+    Object.keys(c.boxes || {}).forEach(function (id) {
+      var b = c.boxes[id];
+      if (!S.convs[id] || !b || now - b.fetchedAt > CACHE_MSG_MAX_AGE) return;
+      var box = boxOf(id); box.list = b.list.slice(); box.byId = {};
+      box.list.forEach(function (m) { box.byId[m.id] = m; });
+      box.more = !!b.more; box.loaded = true; box.fetchedAt = b.fetchedAt; box.firstUnread = 0;
+    });
+    afterBoot();
   }).catch(function (e) {
-    if (!token) return;
+    if (done || !token) return;
     $('#panel').innerHTML = '<div class="empty">' + esc(e.message) + '<br><br><button class="btn" id="retryB">Thử lại</button></div>';
     $('#retryB').onclick = enterMain;
   });
@@ -803,7 +884,7 @@ function loadMessages(id) {
   return api('/api/messages?conv=' + encodeURIComponent(id) + '&limit=40').then(function (d) {
     box.list = []; box.byId = {};
     d.messages.forEach(function (m) { box.list.push(m); box.byId[m.id] = m; });
-    box.more = d.more; box.loaded = true;
+    box.more = d.more; box.loaded = true; box.fetchedAt = Date.now(); cacheSoon();
   }).catch(function (e) { if (S.cur === id && listEl) listEl.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; throw e; });
 }
 function loadOlder() {
@@ -1017,6 +1098,7 @@ function applyFreshMsg(m) {
   var r = upsertMsg(m);
   if (r === 'new' && S.cur === m.conv) { var nb = nearBottom() || m.from === S.me; renderMessages(false); if (nb) scrollBottom(); }
   if (S.cur === m.conv) renderSeen();
+  cacheSoon();
   if (m.hw && S.hwList) { var found = false; S.hwList = S.hwList.map(function (x) { if (x.id === m.id) { found = true; return m; } return x; }); if (!found) S.hwList.unshift(m); if (S.tab === 'hw') renderHwTab(false); }
 }
 
@@ -1034,7 +1116,7 @@ function doSync() {
   syncing = true;
   api('/api/sync?rev=' + S.rev).then(function (d) {
     syncing = false; pollFail = 0;
-    if (d.reset) { S.msgs = {}; return api('/api/bootstrap').then(function (b) { applyBoot(b); refreshAll(); }); }
+    if (d.reset || (d.rev != null && d.rev < S.rev)) { S.msgs = {}; return api('/api/bootstrap').then(function (b) { applyBoot(b); refreshAll(); }); }
     if (d.same) return;
     S.rev = d.rev;
     if (d.members) { setMembers(d.members); renderMeBar(); }
@@ -1058,6 +1140,7 @@ function doSync() {
     if (S.tab === 'chats') renderConvList(); else updateBadges();
     if (S.tab === 'hw' && d.messages && d.messages.some(function (m) { return m.hw; })) renderHwTab(false);
     if (newInCur && nearBottom()) markReadSoon();
+    cacheSoon();
   }).catch(function (e) { syncing = false; if (!e.status || e.status >= 500) pollFail++; })
     .then(function () { schedulePoll(); });
 }
