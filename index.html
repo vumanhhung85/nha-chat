@@ -1294,28 +1294,40 @@ function focusInput() { var i = $('#cin'); if (i) setTimeout(function () { i.foc
 function renderComposer() {
   var el = $('#composer'); if (!el) return;
   var c = curConv(), h = '';
+  var oldRow = (!S.recording && el.querySelector('.crow') && el.querySelector('#cin')) ? el.querySelector('.crow') : null; // giữ nguyên ô nhập để bàn phím không thu lại
   if (S.reply) h += '<div class="cbar reply"><span>↩️</span><span class="tx"><b>' + esc(M(S.reply.from).name) + ':</b> ' + esc(S.reply.text || previewOf(S.reply).replace(/^[^:]*: /, '')) + '</span><button class="x" id="rpX">✕</button></div>';
   if (S.hw) h += '<div class="cbar hwbar"><b>📚 Giao bài tập cho</b><select id="hwFor">' + kidOptions(S.cur, S.hw.for) + '</select><span>Hạn</span><input type="date" id="hwDue" value="' + esc(S.hw.due || '') + '"><button class="x" id="hwX">✕</button></div>';
   if (S.pending.length) h += '<div class="pend" id="pend"></div>';
   if (S.recording) {
     h += '<div class="rec"><span class="dot"></span><span class="tm" id="recT">0:00</span><button class="btn grey" id="recX">✕ Hủy</button><button class="btn" id="recS">➤ Gửi</button></div>';
-  } else {
+  } else if (!oldRow) {
     h += '<div class="crow"><button class="cbtn" id="cPlus" aria-label="Đính kèm">＋</button>' +
       '<textarea class="cin" id="cin" rows="1" placeholder="' + (S.hw ? 'Nội dung bài tập…' : 'Nhắn tin…') + '"></textarea>' +
       '<button class="cbtn mic" id="cMic" aria-label="Ghi âm">🎤</button><button class="cbtn send hidden" id="cSend" aria-label="Gửi">➤</button></div>';
   }
   var keepText = (S.draft && S.draft[S.cur] != null) ? S.draft[S.cur] : ($('#cin') ? $('#cin').value : '');
-  el.innerHTML = h;
+  if (oldRow) { // không tháo ô nhập khỏi trang (tháo là bàn phím thu lại): chỉ thay các thanh phía trên
+    Array.prototype.slice.call(el.children).forEach(function (n) { if (n !== oldRow) el.removeChild(n); });
+    var tmp = document.createElement('div'); tmp.innerHTML = h;
+    while (tmp.firstChild) el.insertBefore(tmp.firstChild, oldRow);
+  } else el.innerHTML = h;
   if (S.pending.length) renderPending();
   if ($('#rpX')) $('#rpX').onclick = function () { S.reply = null; renderComposer(); };
   if ($('#hwX')) $('#hwX').onclick = function () { S.hw = null; renderComposer(); };
   if ($('#hwFor')) { $('#hwFor').onchange = function () { S.hw.for = this.value; }; $('#hwDue').onchange = function () { S.hw.due = this.value; }; }
   if (S.recording) { $('#recX').onclick = function () { stopRecording(false); }; $('#recS').onclick = function () { stopRecording(true); }; return; }
   var cin = $('#cin');
+  cin.placeholder = S.hw ? 'Nội dung bài tập…' : 'Nhắn tin…';
+  if (oldRow) { if (cin.value !== keepText) cin.value = keepText; autoGrow(); syncSendBtn(); return; }
   cin.value = keepText; autoGrow(); syncSendBtn();
   cin.addEventListener('input', function () { autoGrow(); syncSendBtn(); (S.draft = S.draft || {})[S.cur] = cin.value; if (cin.value) sendTyping(); });
   cin.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !isTouch()) { e.preventDefault(); doSend(); } });
-  $('#cSend').onclick = doSend;
+  // chạm nút Gửi không được cướp focus của ô nhập -> bàn phím giữ nguyên như Zalo
+  var keepFocus = function (e) { e.preventDefault(); };
+  ['mousedown', 'pointerdown'].forEach(function (ev) { $('#cSend').addEventListener(ev, keepFocus); $('#cMic').addEventListener(ev, function (e) { if (document.activeElement === cin) e.preventDefault(); }); });
+  $('#cSend').tabIndex = -1;
+  $('#cSend').addEventListener('touchend', function (e) { e.preventDefault(); doSend(); cin.focus(); }); // gửi ngay lúc nhấc ngón tay, giữ focus
+  $('#cSend').onclick = function () { doSend(); if (isTouch()) cin.focus(); };
   $('#cMic').onclick = startRecording;
   $('#cPlus').onclick = plusMenu;
 }
@@ -1440,13 +1452,12 @@ function doSend() {
   var body = { conv: conv, text: text, atts: atts, reply_to: S.reply ? S.reply.id : null };
   if (S.hw) body.hw = { for: S.hw.for || ($('#hwFor') && $('#hwFor').value), due: S.hw.due || ($('#hwDue') && $('#hwDue').value) || '' };
   sending = true;
-  var sb = $('#cSend'); if (sb) sb.disabled = true;
+  if (cin && !atts.length) { cin.value = ''; if (S.draft) S.draft[conv] = ''; autoGrow(); syncSendBtn(); }
   api('/api/send', { body: body }).then(function (d) {
     sending = false;
-    if (S.draft) S.draft[conv] = '';
     if (S.cur === conv) {
       S.reply = null; S.hw = null; S.pending = [];
-      if ($('#cin')) $('#cin').value = '';
+      if ($('#cin') && !(S.draft && S.draft[conv])) $('#cin').value = '';
       renderComposer();
     }
     var c = S.convs[conv]; c.last = d.message; c.my_read = d.message.id; c.reads[S.me] = d.message.id;
@@ -1454,7 +1465,7 @@ function doSend() {
     if (S.cur === conv) scrollBottom();
     renderConvList();
     if (d.message.hw) S.hwList = null;
-  }).catch(function (e) { sending = false; if (sb) sb.disabled = false; toast(e.message, true); });
+  }).catch(function (e) { sending = false; var ci = $('#cin'); if (ci && S.cur === conv && !ci.value) { ci.value = text; (S.draft = S.draft || {})[conv] = text; autoGrow(); syncSendBtn(); } toast(e.message, true); });
 }
 
 /* ---------- ghi âm ---------- */
