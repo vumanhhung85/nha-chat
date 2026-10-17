@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch(); const p = await (await b.newContext({viewport:{width:1200,height:800}})).newPage();
+await p.goto('http://localhost:8080/?api=http://localhost:8787');
+await p.waitForSelector('.who'); await p.click('.who[data-id="linhnhi"]');
+for (const k of ['3','3','3','3']) await p.click(`.pad button[data-k="${k}"]`);
+await p.waitForSelector('.conv'); await p.click('.conv[data-id="family"]'); await p.waitForSelector('.m');
+await p.focus('#cin'); await p.keyboard.type('enter gui'); await p.keyboard.press('Enter');
+await p.waitForFunction(()=>[...document.querySelectorAll('.bub .tx')].some(e=>e.textContent.includes('enter gui')));
+await p.keyboard.type('dong1'); await p.keyboard.press('Shift+Enter'); await p.keyboard.type('dong2');
+const v = await p.inputValue('#cin'); console.log(JSON.stringify(v)); if (v!=='dong1\ndong2') process.exit(1);
+console.log('OK'); await b.close();

@@ -411,6 +411,7 @@ function dueInfo(due) {
 function hexA(hex, a) { var n = parseInt(hex.slice(1), 16); return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')'; }
 function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
 function isStandalone() { return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+function hasKeyboardPC() { try { return window.matchMedia('(hover: hover) and (pointer: fine)').matches; } catch (e) { return !isTouch(); } }
 function isTouch() { return 'ontouchstart' in window || navigator.maxTouchPoints > 0; }
 function deviceName() {
   var u = navigator.userAgent;
@@ -1321,7 +1322,7 @@ function renderComposer() {
   if (oldRow) { if (cin.value !== keepText) cin.value = keepText; autoGrow(); syncSendBtn(); return; }
   cin.value = keepText; autoGrow(); syncSendBtn();
   cin.addEventListener('input', function () { autoGrow(); syncSendBtn(); (S.draft = S.draft || {})[S.cur] = cin.value; if (cin.value) sendTyping(); });
-  cin.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !isTouch()) { e.preventDefault(); doSend(); } });
+  cin.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && hasKeyboardPC()) { e.preventDefault(); doSend(); } });
   // chạm nút Gửi không được cướp focus của ô nhập -> bàn phím giữ nguyên như Zalo
   var keepFocus = function (e) { e.preventDefault(); };
   ['mousedown', 'pointerdown'].forEach(function (ev) { $('#cSend').addEventListener(ev, keepFocus); $('#cMic').addEventListener(ev, function (e) { if (document.activeElement === cin) e.preventDefault(); }); });
