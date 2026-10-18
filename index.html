@@ -398,7 +398,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.4.0';
+var VERSION = '1.4.1';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -2339,7 +2339,22 @@ function checkShare() {
 
 /* ---------- service worker ---------- */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  var hadCtl = !!navigator.serviceWorker.controller, swReg = null, needReload = false;
+  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').then(function (r) { swReg = r; }).catch(function () {}); });
+  // có bản mới → tự tải lại khi rảnh (không giữa cuộc gọi / lúc đang gõ dở)
+  function idleReload() {
+    var cin = document.getElementById('cin');
+    if (call || (cin && cin.value)) return false;
+    location.reload(); return true;
+  }
+  navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (!hadCtl) { hadCtl = true; return; }
+    needReload = true; idleReload();
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { if (needReload) idleReload(); }
+    else if (swReg) { try { swReg.update(); } catch (e) {} }
+  });
 }
 
 start();

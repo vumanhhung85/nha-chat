@@ -2,7 +2,7 @@
    - Lưu sẵn giao diện để mở app nhanh
    - Nhận nội dung "Chia sẻ" từ app khác trên Android (share target)
    - Thông báo đẩy (Web Push): hiện thông báo, bấm vào thì mở đúng cuộc trò chuyện */
-var CACHE = 'nha-shell-v3';
+var CACHE = 'nha-shell-v4';
 var SHELL = ['./', 'index.html', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 
 self.addEventListener('install', function (e) {
