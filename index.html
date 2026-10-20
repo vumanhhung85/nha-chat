@@ -59,6 +59,8 @@ a{color:#1F6FD1}
 .drow .dm{flex:1;min-width:0}
 .drow .dn{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .drow .ds{font-size:13px;color:var(--muted)}
+.crumb{font-size:14px;margin:10px 0 8px;display:flex;flex-wrap:wrap;gap:2px;align-items:center}.crumb button{color:var(--brand-d);font-weight:600;padding:4px 2px}.crumb span{color:var(--muted)}
+.selbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.selbar .btn{min-height:40px;padding:0 12px;font-size:15px}.selbar b{flex:1;min-width:60px}
 .dup{background:var(--panel);border-radius:14px;padding:10px 12px;margin-bottom:8px;font-size:14px;box-shadow:0 1px 6px rgba(80,40,20,.06)}
 .dup .pb{height:6px;background:#F3EAE4;border-radius:4px;overflow:hidden;margin-top:6px}.dup .pb i{display:block;height:100%;width:0;background:var(--brand)}
 
@@ -413,7 +415,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.5.0';
+var VERSION = '1.6.0';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -1781,6 +1783,7 @@ function renderSettings() {
     h += '<div class="card"><h3>👨‍👩‍👧‍👧 Thành viên</h3>' + S.memberList.map(function (x) {
       return '<div class="row">' + avatar(x.id, 'sm') + '<div class="f"><b>' + esc(x.name) + '</b><small>' + (x.role === 'parent' ? 'Bố mẹ' : 'Con') + (x.tg ? ' · Telegram ✅' : '') + '</small></div><button class="btn grey" style="min-height:38px;padding:0 14px" data-edit="' + x.id + '">Sửa</button></div>';
     }).join('') + '</div>';
+    h += '<div class="card"><h3>📁 Cài đặt Kho</h3><div id="stDk" style="font-size:15px;color:var(--muted)">Đang tải…</div></div>';
     h += '<div class="card"><h3>📱 Máy đang đăng nhập</h3><div id="stSes"><div class="empty" style="padding:10px">Đang tải…</div></div></div>';
     h += '<div class="card"><h3>🛠️ Bot Telegram</h3><div id="stBot" style="font-size:15px;color:var(--muted)">Đang kiểm tra…</div>' +
       '<label class="field"><span>Token bot (lấy từ @BotFather)</span><input class="inp" id="stTok" type="password" autocomplete="off" placeholder="123456789:ABC…"></label>' +
@@ -1823,8 +1826,24 @@ function renderSettings() {
         .catch(function (e) { b.disabled = false; toast(e.message, true); });
     };
     loadBot();
-    loadSessions();
+    loadSessions(); loadDocsCfg();
   }
+}
+function loadDocsCfg() {
+  api('/api/admin/docs-config').then(function (c) {
+    var el = $('#stDk'); if (!el) return;
+    var inp = function (id, v) { return '<input class="inp" type="number" min="0" inputmode="numeric" data-k="' + id + '" value="' + v + '" style="width:110px;min-height:40px;text-align:right">'; };
+    el.innerHTML = '<div style="margin-bottom:8px">Đơn vị: MB (1GB = 1024MB). Đổi xong bấm Lưu — áp dụng ngay, tệp đã có không bị xóa.</div>' +
+      c.members.map(function (m) { return '<div class="row"><div class="f"><b>' + esc(m.name) + '</b><small>My Documents</small></div>' + inp('q_' + m.id, c.quota[m.id]) + '</div>'; }).join('') +
+      '<div class="row"><div class="f"><b>Kho chung</b><small>Tổng dung lượng cả nhà</small></div>' + inp('shared', c.shared) + '</div>' +
+      '<div class="row"><div class="f"><b>Tệp lớn nhất</b><small>Mỗi tệp tải lên</small></div>' + inp('max_file', c.max_file) + '</div>' +
+      '<button class="btn block" id="stDkGo" style="margin-top:10px">Lưu cài đặt Kho</button>';
+    $('#stDkGo').onclick = function () {
+      var body = { quota: {}, shared: +$('[data-k="shared"]').value, max_file: +$('[data-k="max_file"]').value };
+      c.members.forEach(function (m) { body.quota[m.id] = +$('[data-k="q_' + m.id + '"]').value; });
+      api('/api/admin/docs-config', { body: body }).then(function () { S.docs.data = null; toast('Đã lưu cài đặt Kho'); }).catch(function (e) { toast(e.message, true); });
+    };
+  }).catch(function () { var el = $('#stDk'); if (el) el.textContent = 'Không tải được cài đặt'; });
 }
 function loadBot() {
   api('/api/admin/status').then(function (d) {
@@ -2336,7 +2355,7 @@ if ('serviceWorker' in navigator) {
 /* =========================================================
    Kho: My Documents (riêng) + Kho chung (cả nhà)
    ========================================================= */
-S.docs = S.docs || { space: 'mine', data: null, up: [] };
+S.docs = S.docs || { space: 'mine', parent: 0, data: null, up: [], selecting: false, sel: {} };
 function docIcon(it) {
   var m = it.mime || '', n = (it.name || '').toLowerCase();
   if (/^image\//.test(m)) return '🖼️'; if (/^video\//.test(m)) return '🎬'; if (/^audio\//.test(m)) return '🎵';
@@ -2348,31 +2367,90 @@ function docIcon(it) {
 function fmtBig(n) { return n >= 1073741824 ? (n / 1073741824).toFixed(n >= 10737418240 ? 0 : 1) + ' GB' : fmtSize(n) || '0 B'; }
 function renderDocsTab() {
   var st = S.docs;
-  var d = st.data && st.data.space === st.space ? st.data : null;
+  var d = st.data && st.data.space === st.space && st.data.parent === st.parent ? st.data : null;
   var h = '<div class="dk"><div class="seg"><button data-sp="mine" class="' + (st.space === 'mine' ? 'on' : '') + '">📁 My Documents</button><button data-sp="shared" class="' + (st.space === 'shared' ? 'on' : '') + '">🗂️ Kho chung</button></div>';
-  h += '<div style="font-size:13px;color:var(--muted);margin:10px 2px 0">' + (st.space === 'mine' ? 'Chỉ mình bạn thấy. Lưu tạm tệp, tải lên từ máy hoặc từ tin nhắn.' : 'Cả nhà cùng dùng — để lưu tệp lớn, tài liệu chung.') + '</div>';
   if (d) {
-    var pct = Math.min(100, Math.round(d.used * 100 / d.quota));
-    h += '<div class="quota"><i style="width:' + pct + '%"></i></div><div class="qtx">Đã dùng ' + fmtBig(d.used) + ' / ' + fmtBig(d.quota) + '</div>';
+    var pct = Math.min(100, Math.round(d.used * 100 / (d.quota || 1)));
+    h += '<div class="quota"><i style="width:' + pct + '%"></i></div><div class="qtx">Đã dùng ' + fmtBig(d.used) + ' / ' + fmtBig(d.quota) + ' · mỗi tệp tối đa ' + fmtBig(d.max_file) + '</div>';
+    h += '<div class="crumb"><button data-f="0">' + (st.space === 'mine' ? 'My Documents' : 'Kho chung') + '</button>' + d.path.map(function (x) { return ' <span>›</span> <button data-f="' + x.id + '">' + esc(x.name) + '</button>'; }).join('') + '</div>';
+  } else h += '<div style="height:14px"></div>';
+  if (st.selecting) {
+    var n = Object.keys(st.sel).length;
+    h += '<div class="selbar"><b>' + n + ' mục</b><button class="btn grey" data-sa="mv"' + (n ? '' : ' disabled') + '>Di chuyển</button><button class="btn grey" data-sa="cp"' + (n ? '' : ' disabled') + '>Sao chép</button><button class="btn danger" data-sa="rm"' + (n ? '' : ' disabled') + '>Xóa</button><button class="btn grey" data-sa="x">Xong</button></div>';
+  } else {
+    h += '<div style="display:flex;gap:8px"><button class="btn" id="dkUp" style="flex:1">＋ Tải lên</button><button class="btn grey" id="dkMk">📁＋ Thư mục</button>' + (d && d.items.length ? '<button class="btn grey" id="dkSel">☑️</button>' : '') + '</div>';
   }
-  h += '<button class="btn block" id="dkUp">＋ Tải tệp lên</button><input type="file" id="dkFile" multiple class="hidden"><div style="height:10px"></div>';
+  h += '<input type="file" id="dkFile" multiple class="hidden"><div style="height:10px"></div>';
   h += '<div id="dkUps">' + st.up.map(function (u) { return '<div class="dup" data-u="' + u.id + '">' + esc(u.name) + ' <span style="color:var(--muted)">' + (u.err ? '— ' + esc(u.err) : Math.round(u.p * 100) + '%') + '</span><div class="pb"><i style="width:' + Math.round(u.p * 100) + '%"></i></div></div>'; }).join('') + '</div>';
   if (!d) h += '<div class="empty">Đang tải…</div>';
-  else if (!d.items.length) h += '<div class="empty">Chưa có tệp nào</div>';
+  else if (!d.items.length) h += '<div class="empty">Thư mục trống</div>';
   else h += d.items.map(function (it) {
-    return '<button class="drow" data-id="' + it.id + '"><span class="di">' + docIcon(it) + '</span><span class="dm"><span class="dn">' + esc(it.name) + '</span><span class="ds">' + fmtBig(it.size) + ' · ' + shortTime(it.at) + (st.space === 'shared' ? ' · ' + esc(M(it.owner).name) : '') + '</span></span><span style="color:var(--muted);font-size:20px">⋯</span></button>';
+    var isF = it.kind === 'folder';
+    return '<button class="drow" data-id="' + it.id + '">' + (st.selecting ? '<span style="font-size:22px">' + (st.sel[it.id] ? '✅' : '⬜') + '</span>' : '') + '<span class="di">' + (isF ? '📂' : docIcon(it)) + '</span><span class="dm"><span class="dn">' + esc(it.name) + '</span><span class="ds">' + (isF ? 'Thư mục' : fmtBig(it.size)) + ' · ' + shortTime(it.at) + (st.space === 'shared' ? ' · ' + esc(M(it.owner).name) : '') + '</span></span>' + (st.selecting ? '' : '<span class="dmore" data-more="1" style="color:var(--muted);font-size:22px;padding:6px 10px">⋯</span>') + '</button>';
   }).join('');
   h += '</div>';
   var pn = $('#panel'); var keep = pn.scrollTop;
   pn.innerHTML = h; pn.scrollTop = keep;
-  $$('[data-sp]', pn).forEach(function (b) { b.onclick = function () { st.space = b.getAttribute('data-sp'); st.data = null; renderDocsTab(); loadDocs(); }; });
-  $('#dkUp').onclick = function () { $('#dkFile').click(); };
-  $('#dkFile').onchange = function () { var fs = Array.prototype.slice.call(this.files || []); this.value = ''; docsUploadMany(st.space, fs); };
-  $$('.drow', pn).forEach(function (b) { b.onclick = function () { docSheet(+b.getAttribute('data-id')); }; });
+  $$('[data-sp]', pn).forEach(function (b) { b.onclick = function () { st.space = b.getAttribute('data-sp'); st.parent = 0; st.data = null; st.selecting = false; st.sel = {}; renderDocsTab(); loadDocs(); }; });
+  $$('[data-f]', pn).forEach(function (b) { b.onclick = function () { st.parent = +b.getAttribute('data-f'); st.data = null; st.selecting = false; st.sel = {}; renderDocsTab(); loadDocs(); }; });
+  var up = $('#dkUp'); if (up) up.onclick = function () { $('#dkFile').click(); };
+  $('#dkFile').onchange = function () { var fs = Array.prototype.slice.call(this.files || []); this.value = ''; docsUploadMany(st.space, st.parent, fs); };
+  var mk = $('#dkMk'); if (mk) mk.onclick = function () { nameSheet('Thư mục mới', '', function (nm) { return api('/api/docs/folder', { body: { space: st.space, parent: st.parent, name: nm } }).then(loadDocs); }); };
+  var sl = $('#dkSel'); if (sl) sl.onclick = function () { st.selecting = true; st.sel = {}; renderDocsTab(); };
+  $$('[data-sa]', pn).forEach(function (b) { b.onclick = function () { selAction(b.getAttribute('data-sa')); }; });
+  $$('.drow', pn).forEach(function (b) {
+    b.onclick = function (e) {
+      var it = d.items.filter(function (x) { return x.id === +b.getAttribute('data-id'); })[0]; if (!it) return;
+      if (st.selecting) { if (st.sel[it.id]) delete st.sel[it.id]; else st.sel[it.id] = 1; renderDocsTab(); return; }
+      var more = e.target && e.target.getAttribute && e.target.getAttribute('data-more');
+      if (it.kind === 'folder' && !more) { st.parent = it.id; st.data = null; renderDocsTab(); loadDocs(); }
+      else docSheet(it.id);
+    };
+  });
 }
 function loadDocs() {
-  var sp = S.docs.space;
-  return api('/api/docs?space=' + sp).then(function (d) { if (S.docs.space === sp) { S.docs.data = d; if (S.tab === 'docs') renderDocsTab(); } }).catch(function (e) { toast(e.message, true); });
+  var sp = S.docs.space, par = S.docs.parent;
+  return api('/api/docs?space=' + sp + '&parent=' + par).then(function (d) { if (S.docs.space === sp && S.docs.parent === par) { S.docs.data = d; if (S.tab === 'docs') renderDocsTab(); } }).catch(function (e) { toast(e.message, true); });
+}
+function nameSheet(title, val, cb) {
+  var sh = openSheet('<h3>' + esc(title) + '</h3><input class="inp" id="nmIn" maxlength="120" value="' + esc(val) + '"><button class="btn block" id="nmGo" style="margin-top:12px">Lưu</button>');
+  var inp = $('#nmIn', sh); setTimeout(function () { inp.focus(); inp.select(); }, 100);
+  function go() { var v = inp.value.trim(); if (!v) return; closeSheet(); Promise.resolve(cb(v)).catch(function (e) { toast(e.message, true); }); }
+  $('#nmGo', sh).onclick = go; inp.onkeydown = function (e) { if (e.key === 'Enter') go(); };
+}
+/* chọn thư mục đích (Di chuyển / Sao chép) */
+function pickFolder(title, cb) {
+  var cur = { space: S.docs.space, parent: 0 };
+  var sh = openSheet('<div id="pfBox"></div>');
+  function draw(d) {
+    var h = '<h3>' + esc(title) + '</h3><div class="seg"><button data-sp="mine" class="' + (cur.space === 'mine' ? 'on' : '') + '">📁 My Documents</button><button data-sp="shared" class="' + (cur.space === 'shared' ? 'on' : '') + '">🗂️ Kho chung</button></div>';
+    h += '<div class="crumb" style="margin:8px 0"><button data-pf="0">Gốc</button>' + (d ? d.path.map(function (x) { return ' <span>›</span> <button data-pf="' + x.id + '">' + esc(x.name) + '</button>'; }).join('') : '') + '</div>';
+    h += '<div style="max-height:38vh;overflow:auto">' + (d ? (d.items.filter(function (x) { return x.kind === 'folder'; }).map(function (x) { return '<button class="drow" data-pf="' + x.id + '"><span class="di">📂</span><span class="dm"><span class="dn">' + esc(x.name) + '</span></span></button>'; }).join('') || '<div class="empty" style="padding:12px">Không có thư mục con</div>') : '<div class="empty">Đang tải…</div>') + '</div>';
+    h += '<button class="btn block" id="pfOk" style="margin-top:10px">✓ Chọn thư mục này</button>';
+    $('#pfBox', sh).innerHTML = h;
+    $$('[data-sp]', sh).forEach(function (b) { b.onclick = function () { cur = { space: b.getAttribute('data-sp'), parent: 0 }; load(); }; });
+    $$('[data-pf]', sh).forEach(function (b) { b.onclick = function () { cur.parent = +b.getAttribute('data-pf'); load(); }; });
+    $('#pfOk', sh).onclick = function () { closeSheet(); cb(cur.space, cur.parent); };
+  }
+  function load() { draw(null); api('/api/docs?space=' + cur.space + '&parent=' + cur.parent).then(draw).catch(function (e) { toast(e.message, true); }); }
+  load();
+}
+function selAction(a) {
+  var st = S.docs, ids = Object.keys(st.sel).map(Number);
+  if (a === 'x') { st.selecting = false; st.sel = {}; renderDocsTab(); return; }
+  if (!ids.length) return;
+  docOp(a, ids);
+}
+function docOp(a, ids) {
+  var st = S.docs;
+  function done(msg) { return function () { st.selecting = false; st.sel = {}; toast(msg); return loadDocs(); }; }
+  function fail(e) { toast(e.message, true); }
+  if (a === 'rm') {
+    var c = openSheet('<h3>Xóa ' + ids.length + ' mục?</h3><p style="text-align:center;color:var(--muted)">Thư mục bị xóa sẽ mất cả tệp bên trong.</p><button class="btn danger block" id="dyY">🗑️ Xóa</button><button class="act" style="justify-content:center;color:var(--muted)" id="dyN">Không</button>');
+    $('#dyN', c).onclick = closeSheet;
+    $('#dyY', c).onclick = function () { closeSheet(); api('/api/docs/delete', { body: { ids: ids } }).then(done('Đã xóa')).catch(fail); };
+  } else if (a === 'mv') pickFolder('Di chuyển tới…', function (sp, pa) { api('/api/docs/move', { body: { ids: ids, space: sp, parent: pa } }).then(done('Đã di chuyển')).catch(fail); });
+  else if (a === 'cp') pickFolder('Sao chép tới…', function (sp, pa) { toast('Đang sao chép…'); api('/api/docs/copy', { body: { ids: ids, space: sp, parent: pa } }).then(done('Đã sao chép')).catch(fail); });
 }
 function putPart(s, n, blob, onp) {
   return new Promise(function (res, rej) {
@@ -2388,12 +2466,12 @@ function putPart(s, n, blob, onp) {
 function putPartRetry(s, n, blob, onp, left) {
   return putPart(s, n, blob, onp).catch(function (e) { if (left > 0 && !/^Lỗi 4/.test(e.message)) return new Promise(function (r) { setTimeout(r, 1200); }).then(function () { return putPartRetry(s, n, blob, onp, left - 1); }); throw e; });
 }
-function docUpload(space, file, onProg) {
+function docUpload(space, parent, file, onProg) {
   var name = file.name || 'tep', mime = file.type || 'application/octet-stream';
-  return api('/api/docs/start', { body: { space: space, name: name, size: file.size, mime: mime } }).then(function (s) {
+  return api('/api/docs/start', { body: { space: space, parent: parent, name: name, size: file.size, mime: mime } }).then(function (s) {
     var parts = [], done = 0, n = 0, total = file.size, chunk = s.chunk || 8388608;
     function next() {
-      if (done >= total) return api('/api/docs/finish', { body: { space: space, key: s.key, uploadId: s.uploadId, parts: parts, name: name, mime: mime } });
+      if (done >= total) return api('/api/docs/finish', { body: { space: space, parent: parent, key: s.key, uploadId: s.uploadId, parts: parts, name: name, mime: mime } });
       var blob = file.slice(done, Math.min(total, done + chunk)); n++;
       return putPartRetry(s, n, blob, function (l) { if (onProg) onProg((done + l) / total); }, 2).then(function (p) { parts.push(p); done += blob.size; return next(); });
     }
@@ -2401,13 +2479,13 @@ function docUpload(space, file, onProg) {
   });
 }
 var upId = 0;
-function docsUploadMany(space, files) {
+function docsUploadMany(space, parent, files) {
   var st = S.docs;
   return files.reduce(function (chain, f) {
     return chain.then(function () {
       var u = { id: ++upId, name: f.name || 'tep', p: 0 }; st.up.push(u);
       if (S.tab === 'docs') renderDocsTab();
-      return docUpload(space, f, function (p) {
+      return docUpload(space, parent, f, function (p) {
         u.p = p; var el = S.tab === 'docs' && $('[data-u="' + u.id + '"]');
         if (el) { el.querySelector('i').style.width = Math.round(p * 100) + '%'; el.querySelector('span').textContent = Math.round(p * 100) + '%'; }
       }).then(function () { st.up = st.up.filter(function (x) { return x !== u; }); }, function (e) {
@@ -2415,30 +2493,32 @@ function docsUploadMany(space, files) {
         setTimeout(function () { st.up = st.up.filter(function (x) { return x !== u; }); if (S.tab === 'docs') renderDocsTab(); }, 5000);
       });
     });
-  }, Promise.resolve()).then(function () { if (st.space === space) return loadDocs(); });
+  }, Promise.resolve()).then(function () { if (st.space === space && st.parent === parent) return loadDocs(); });
 }
 function docSheet(id) {
   var d = S.docs.data; var it = d && d.items.filter(function (x) { return x.id === id; })[0]; if (!it) return;
-  var sh = openSheet('<h3 style="word-break:break-all">' + docIcon(it) + ' ' + esc(it.name) + '</h3><div style="text-align:center;color:var(--muted);font-size:14px;margin-bottom:6px">' + fmtBig(it.size) + '</div>' +
-    '<button class="act" data-a="dl"><span class="e">⬇️</span>Tải về / mở</button>' +
-    (it.size <= MAX_FILE ? '<button class="act" data-a="send"><span class="e">💬</span>Gửi vào cuộc trò chuyện…</button>' : '') +
-    (navigator.share ? '<button class="act" data-a="share"><span class="e">📤</span>Chia sẻ ra app khác</button>' : '') +
+  var isF = it.kind === 'folder';
+  var sh = openSheet('<h3 style="word-break:break-all">' + (isF ? '📂' : docIcon(it)) + ' ' + esc(it.name) + '</h3>' + (isF ? '' : '<div style="text-align:center;color:var(--muted);font-size:14px;margin-bottom:6px">' + fmtBig(it.size) + '</div>') +
+    (isF ? '<button class="act" data-a="open"><span class="e">📂</span>Mở thư mục</button>' : '<button class="act" data-a="dl"><span class="e">⬇️</span>Tải về / mở</button>') +
+    (it.can_del ? '<button class="act" data-a="ren"><span class="e">✏️</span>Đổi tên</button><button class="act" data-a="mv"><span class="e">📦</span>Di chuyển tới…</button>' : '') +
+    '<button class="act" data-a="cp"><span class="e">📑</span>Sao chép tới…</button>' +
+    (!isF && it.size <= MAX_FILE ? '<button class="act" data-a="send"><span class="e">💬</span>Gửi vào cuộc trò chuyện…</button>' : '') +
+    (!isF && navigator.share ? '<button class="act" data-a="share"><span class="e">📤</span>Chia sẻ ra app khác</button>' : '') +
     (it.can_del ? '<button class="act red" data-a="del"><span class="e">🗑️</span>Xóa</button>' : '') +
     '<button class="act" data-a="x" style="justify-content:center;color:var(--muted)">Đóng</button>');
   $$('[data-a]', sh).forEach(function (b) {
     b.onclick = function () {
       var a = b.getAttribute('data-a'); closeSheet();
-      if (a === 'dl') { var l = document.createElement('a'); l.href = it.url + '&dl=1'; l.target = '_blank'; l.rel = 'noopener'; document.body.appendChild(l); l.click(); document.body.removeChild(l); }
+      if (a === 'open') { S.docs.parent = it.id; S.docs.data = null; renderDocsTab(); loadDocs(); }
+      else if (a === 'dl') { var l = document.createElement('a'); l.href = it.url + '&dl=1'; l.target = '_blank'; l.rel = 'noopener'; document.body.appendChild(l); l.click(); document.body.removeChild(l); }
+      else if (a === 'ren') nameSheet('Đổi tên', it.name, function (nm) { return api('/api/docs/rename', { body: { id: it.id, name: nm } }).then(loadDocs); });
+      else if (a === 'mv' || a === 'cp') docOp(a, [it.id]);
       else if (a === 'send') pickConvs('Gửi tới…', false, function (ids) {
         api('/api/docs/attach', { body: { id: it.id } }).then(function (at) { return api('/api/send', { body: { conv: ids[0], text: '', atts: [at.id] } }); })
           .then(function () { toast('Đã gửi'); }).catch(function (e) { toast(e.message, true); });
       });
       else if (a === 'share') shareFiles('', [{ url: it.url, name: it.name, mime: it.mime }]);
-      else if (a === 'del') {
-        var c = openSheet('<h3>Xóa "' + esc(it.name) + '"?</h3><button class="btn danger block" id="dyY">🗑️ Xóa</button><button class="act" style="justify-content:center;color:var(--muted)" id="dyN">Không</button>');
-        $('#dyN', c).onclick = closeSheet;
-        $('#dyY', c).onclick = function () { closeSheet(); api('/api/docs/delete', { body: { id: it.id } }).then(loadDocs).catch(function (e) { toast(e.message, true); }); };
-      }
+      else if (a === 'del') docOp('rm', [it.id]);
     };
   });
 }
@@ -2498,7 +2578,7 @@ function checkShare() {
       (sh.files.length ? '<button class="act" data-doc="mine"><span class="e">📁</span>Lưu vào My Documents</button><button class="act" data-doc="shared"><span class="e">🗂️</span>Lưu vào Kho chung</button><div style="font-size:13px;color:var(--muted);padding:6px 8px">Hoặc gửi vào chat:</div>' : '') +
       sortedConvs().map(function (c) { return '<button class="conv" data-to="' + c.id + '">' + convAvatar(c, 'sm') + '<div class="mid"><span class="nm">' + esc(convName(c)) + '</span></div></button>'; }).join(''));
     $$('[data-doc]', el).forEach(function (b) {
-      b.onclick = function () { closeSheet(); S.docs.space = b.getAttribute('data-doc'); S.docs.data = null; setTab('docs'); loadDocs(); docsUploadMany(S.docs.space, sh.files); };
+      b.onclick = function () { closeSheet(); S.docs.space = b.getAttribute('data-doc'); S.docs.parent = 0; S.docs.data = null; setTab('docs'); loadDocs(); docsUploadMany(S.docs.space, 0, sh.files); };
     });
     $$('[data-to]', el).forEach(function (b) {
       b.onclick = function () {
