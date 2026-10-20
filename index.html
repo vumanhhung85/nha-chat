@@ -2,6 +2,7 @@
 <html lang="vi">
 <head>
 <meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Nhà Mình</title>
 <meta name="theme-color" content="#F2765A">
@@ -61,6 +62,9 @@ a{color:#1F6FD1}
 .drow .ds{font-size:13px;color:var(--muted)}
 .crumb{font-size:14px;margin:10px 0 8px;display:flex;flex-wrap:wrap;gap:2px;align-items:center}.crumb button{color:var(--brand-d);font-weight:600;padding:4px 2px}.crumb span{color:var(--muted)}
 .selbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.selbar .btn{min-height:40px;padding:0 12px;font-size:15px}.selbar b{flex:1;min-width:60px}
+.kho-mode #meBar,.kho-mode #tabs,.kho-mode #main{display:none!important}
+.kho-mode .side{width:100%;flex:1 1 auto;max-width:760px;margin:0 auto;border-right:0}
+.khohd{display:flex;align-items:center;justify-content:space-between;font-size:20px;margin-bottom:6px}
 .dup{background:var(--panel);border-radius:14px;padding:10px 12px;margin-bottom:8px;font-size:14px;box-shadow:0 1px 6px rgba(80,40,20,.06)}
 .dup .pb{height:6px;background:#F3EAE4;border-radius:4px;overflow:hidden;margin-top:6px}.dup .pb i{display:block;height:100%;width:0;background:var(--brand)}
 
@@ -384,6 +388,17 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
     </div>
   </div>
 
+  <div class="screen hidden" id="scrKho">
+    <div class="center">
+      <img class="logo" src="icons/icon-192.png" alt="">
+      <div class="h1">Kho chung</div>
+      <p class="sub">Nhập mật khẩu để vào kho</p>
+      <input class="inp" type="password" id="khoPw" autocomplete="current-password" placeholder="Mật khẩu" style="text-align:center">
+      <button class="btn block" id="khoGo" style="margin-top:12px">Vào kho</button>
+      <div id="khoErr" class="pin-msg" style="margin-top:12px"></div>
+    </div>
+  </div>
+
   <!-- Màn hình chính -->
   <div class="shell hidden" id="scrMain">
     <aside class="side">
@@ -415,7 +430,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.6.0';
+var VERSION = '1.7.0';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -488,10 +503,15 @@ var API = (function () {
   if (q && local) lsSet('nha_api', q);
   return (local && lsGet('nha_api')) || DEFAULT_API;
 })();
-var token = lsGet('nha_token');
+var KHO = /[?&]kho=1/.test(location.search);   // chế độ "Kho chung" truy cập nhanh bằng mật khẩu
+function khoTokGet() { try { return sessionStorage.getItem('nha_kho_token'); } catch (e) { return null; } }
+function khoTokSet(v) { try { if (v) sessionStorage.setItem('nha_kho_token', v); else sessionStorage.removeItem('nha_kho_token'); } catch (e) {} }
+var token = KHO ? khoTokGet() : lsGet('nha_token');
+if (KHO) document.body.classList.add('kho-mode');
 
 function api(path, opt) {
   opt = opt || {};
+  if (KHO) path = path.replace(/^\/api\/docs/, '/api/kho');
   var h = {};
   if (token) h.Authorization = 'Bearer ' + token;
   var body;
@@ -499,7 +519,7 @@ function api(path, opt) {
   return fetch(API + path, { method: opt.method || (opt.body ? 'POST' : 'GET'), headers: h, body: body, cache: 'no-store' })
     .then(function (r) {
       return r.json().catch(function () { return { error: 'Máy chủ trả lời không hợp lệ (' + r.status + ')' }; }).then(function (d) {
-        if (r.status === 401 && d.code === 'no_auth' && token) { logout(true); }
+        if (r.status === 401 && d.code === 'no_auth' && token) { if (KHO) khoOut(true); else logout(true); }
         if (!r.ok) { var e = new Error(d.error || ('Lỗi ' + r.status)); e.status = r.status; e.code = d.code; throw e; }
         return d;
       });
@@ -535,7 +555,7 @@ var S = {
   msgs: {}, cur: null, tab: 'chats', reply: null,
   hw: null, pending: [], hwList: null, fs: lsGet('nha_fs') || 'm'
 };
-function M(id) { return S.members[id] || { id: id, name: '?', avatar: '🙂', color: '#999999', role: 'child' }; }
+function M(id) { return S.members[id] || { id: id, name: id === 'kho' ? 'Kho (mật khẩu)' : '?', avatar: '🙂', color: '#999999', role: 'child' }; }
 function meM() { return M(S.me); }
 function isParent() { return meM().role === 'parent'; }
 function avatar(id, cls) {
@@ -609,7 +629,7 @@ window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault()
 $('#btnInstallA').onclick = function () { if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; this.classList.add('hidden'); } };
 
 function show(id) {
-  ['scrInstall', 'scrLogin', 'scrMain'].forEach(function (x) { $('#' + x).classList.toggle('hidden', x !== id); });
+  ['scrInstall', 'scrLogin', 'scrMain', 'scrKho'].forEach(function (x) { $('#' + x).classList.toggle('hidden', x !== id); });
 }
 
 function start() {
@@ -619,9 +639,35 @@ function start() {
     $('#loginErr').textContent = 'Chưa cấu hình địa chỉ máy chủ (DEFAULT_API) trong index.html.';
     return;
   }
+  if (KHO) { khoStart(); return; }
   if (token) { enterMain(); return; }
   if (isIOS() && !isStandalone() && !lsGet('nha_skip_install')) { show('scrInstall'); return; }
   showLogin();
+}
+/* ---------- Kho chung truy cập nhanh ---------- */
+function khoStart() {
+  document.title = 'Kho chung';
+  if (token) khoEnter(); else khoLoginScreen();
+}
+function khoLoginScreen(expired) {
+  token = null; khoTokSet(null);
+  show('scrKho');
+  $('#khoErr').textContent = expired ? 'Hết phiên, hãy nhập lại mật khẩu' : '';
+  var pw = $('#khoPw'); pw.value = ''; setTimeout(function () { pw.focus(); }, 150);
+  function go() {
+    var v = pw.value; if (!v) return;
+    $('#khoGo').disabled = true;
+    api('/api/kho/login', { body: { password: v } }).then(function (d) { token = d.token; khoTokSet(d.token); khoEnter(); })
+      .catch(function (e) { $('#khoErr').textContent = e.message; pw.value = ''; })
+      .then(function () { $('#khoGo').disabled = false; });
+  }
+  $('#khoGo').onclick = go; pw.onkeydown = function (e) { if (e.key === 'Enter') go(); };
+}
+function khoOut(expired) { khoLoginScreen(expired); }
+function khoEnter() {
+  show('scrMain');
+  S.tab = 'docs'; S.docs.space = 'shared'; S.docs.parent = 0; S.docs.data = null;
+  renderDocsTab(); loadDocs();
 }
 $('#skipInstall').onclick = function () { lsSet('nha_skip_install', '1'); showLogin(); };
 
@@ -1784,6 +1830,7 @@ function renderSettings() {
       return '<div class="row">' + avatar(x.id, 'sm') + '<div class="f"><b>' + esc(x.name) + '</b><small>' + (x.role === 'parent' ? 'Bố mẹ' : 'Con') + (x.tg ? ' · Telegram ✅' : '') + '</small></div><button class="btn grey" style="min-height:38px;padding:0 14px" data-edit="' + x.id + '">Sửa</button></div>';
     }).join('') + '</div>';
     h += '<div class="card"><h3>📁 Cài đặt Kho</h3><div id="stDk" style="font-size:15px;color:var(--muted)">Đang tải…</div></div>';
+    h += '<div class="card"><h3>🔑 Truy cập nhanh Kho chung</h3><div id="stKho" style="font-size:15px;color:var(--muted)">Đang tải…</div></div>';
     h += '<div class="card"><h3>📱 Máy đang đăng nhập</h3><div id="stSes"><div class="empty" style="padding:10px">Đang tải…</div></div></div>';
     h += '<div class="card"><h3>🛠️ Bot Telegram</h3><div id="stBot" style="font-size:15px;color:var(--muted)">Đang kiểm tra…</div>' +
       '<label class="field"><span>Token bot (lấy từ @BotFather)</span><input class="inp" id="stTok" type="password" autocomplete="off" placeholder="123456789:ABC…"></label>' +
@@ -1826,8 +1873,22 @@ function renderSettings() {
         .catch(function (e) { b.disabled = false; toast(e.message, true); });
     };
     loadBot();
-    loadSessions(); loadDocsCfg();
+    loadSessions(); loadDocsCfg(); loadKhoCfg();
   }
+}
+function loadKhoCfg() {
+  api('/api/admin/kho').then(function (c) {
+    var el = $('#stKho'); if (!el) return;
+    var link = location.origin + '/kho';
+    el.innerHTML = '<div style="margin-bottom:8px">Mở <b style="color:var(--text)">' + esc(link) + '</b> trên bất kỳ máy nào, nhập mật khẩu là vào được Kho chung (không thấy danh sách thành viên, không xem được tin nhắn). Phiên tự hết sau 8 giờ hoặc khi đóng tab.</div>' +
+      '<div style="margin-bottom:6px">' + (c.enabled ? '<b style="color:var(--ok)">✅ Đang bật</b>' : '<b>Đang tắt</b>') + '</div>' +
+      '<label class="field"><span>' + (c.enabled ? 'Đổi mật khẩu (từ 6 ký tự)' : 'Đặt mật khẩu (từ 6 ký tự)') + '</span><input class="inp" id="stKhoPw" type="text" autocomplete="off" placeholder="Mật khẩu Kho"></label>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="stKhoGo">' + (c.enabled ? 'Đổi mật khẩu' : 'Bật') + '</button><button class="btn grey" id="stKhoCp">📋 Chép link</button>' + (c.enabled ? '<button class="btn grey" id="stKhoOff">Tắt</button>' : '') + '</div>' +
+      (c.enabled ? '<div style="margin-top:8px;font-size:13px">Đổi mật khẩu hoặc tắt sẽ đăng xuất mọi máy đang vào Kho. Sai 5 lần sẽ bị khóa 15 phút.</div>' : '');
+    $('#stKhoGo').onclick = function () { var v = $('#stKhoPw').value; if (!v) return toast('Nhập mật khẩu trước', true); api('/api/admin/kho', { body: { password: v } }).then(function () { toast('Đã lưu mật khẩu Kho'); loadKhoCfg(); }).catch(function (e) { toast(e.message, true); }); };
+    $('#stKhoCp').onclick = function () { copyText(link); };
+    var off = $('#stKhoOff'); if (off) off.onclick = function () { api('/api/admin/kho', { body: { password: '' } }).then(function () { toast('Đã tắt'); loadKhoCfg(); }).catch(function (e) { toast(e.message, true); }); };
+  }).catch(function () { var el = $('#stKho'); if (el) el.textContent = 'Không tải được'; });
 }
 function loadDocsCfg() {
   api('/api/admin/docs-config').then(function (c) {
@@ -2368,7 +2429,8 @@ function fmtBig(n) { return n >= 1073741824 ? (n / 1073741824).toFixed(n >= 1073
 function renderDocsTab() {
   var st = S.docs;
   var d = st.data && st.data.space === st.space && st.data.parent === st.parent ? st.data : null;
-  var h = '<div class="dk"><div class="seg"><button data-sp="mine" class="' + (st.space === 'mine' ? 'on' : '') + '">📁 My Documents</button><button data-sp="shared" class="' + (st.space === 'shared' ? 'on' : '') + '">🗂️ Kho chung</button></div>';
+  var h = '<div class="dk">' + (KHO ? '<div class="khohd"><b>🗂️ Kho chung</b><button class="btn grey" id="khoOut" style="min-height:38px;padding:0 14px">Đăng xuất</button></div>' :
+    '<div class="seg"><button data-sp="mine" class="' + (st.space === 'mine' ? 'on' : '') + '">📁 My Documents</button><button data-sp="shared" class="' + (st.space === 'shared' ? 'on' : '') + '">🗂️ Kho chung</button></div>');
   if (d) {
     var pct = Math.min(100, Math.round(d.used * 100 / (d.quota || 1)));
     h += '<div class="quota"><i style="width:' + pct + '%"></i></div><div class="qtx">Đã dùng ' + fmtBig(d.used) + ' / ' + fmtBig(d.quota) + ' · mỗi tệp tối đa ' + fmtBig(d.max_file) + '</div>';
@@ -2393,6 +2455,7 @@ function renderDocsTab() {
   pn.innerHTML = h; pn.scrollTop = keep;
   $$('[data-sp]', pn).forEach(function (b) { b.onclick = function () { st.space = b.getAttribute('data-sp'); st.parent = 0; st.data = null; st.selecting = false; st.sel = {}; renderDocsTab(); loadDocs(); }; });
   $$('[data-f]', pn).forEach(function (b) { b.onclick = function () { st.parent = +b.getAttribute('data-f'); st.data = null; st.selecting = false; st.sel = {}; renderDocsTab(); loadDocs(); }; });
+  var ko = $('#khoOut'); if (ko) ko.onclick = function () { khoOut(false); };
   var up = $('#dkUp'); if (up) up.onclick = function () { $('#dkFile').click(); };
   $('#dkFile').onchange = function () { var fs = Array.prototype.slice.call(this.files || []); this.value = ''; docsUploadMany(st.space, st.parent, fs); };
   var mk = $('#dkMk'); if (mk) mk.onclick = function () { nameSheet('Thư mục mới', '', function (nm) { return api('/api/docs/folder', { body: { space: st.space, parent: st.parent, name: nm } }).then(loadDocs); }); };
@@ -2410,7 +2473,7 @@ function renderDocsTab() {
 }
 function loadDocs() {
   var sp = S.docs.space, par = S.docs.parent;
-  return api('/api/docs?space=' + sp + '&parent=' + par).then(function (d) { if (S.docs.space === sp && S.docs.parent === par) { S.docs.data = d; if (S.tab === 'docs') renderDocsTab(); } }).catch(function (e) { toast(e.message, true); });
+  return api('/api/docs?space=' + sp + '&parent=' + par).then(function (d) { if (S.docs.space === sp && S.docs.parent === par) { S.docs.data = d; if (KHO && d.members) setMembers(d.members); if (S.tab === 'docs') renderDocsTab(); } }).catch(function (e) { toast(e.message, true); });
 }
 function nameSheet(title, val, cb) {
   var sh = openSheet('<h3>' + esc(title) + '</h3><input class="inp" id="nmIn" maxlength="120" value="' + esc(val) + '"><button class="btn block" id="nmGo" style="margin-top:12px">Lưu</button>');
@@ -2420,10 +2483,10 @@ function nameSheet(title, val, cb) {
 }
 /* chọn thư mục đích (Di chuyển / Sao chép) */
 function pickFolder(title, cb) {
-  var cur = { space: S.docs.space, parent: 0 };
+  var cur = { space: KHO ? 'shared' : S.docs.space, parent: 0 };
   var sh = openSheet('<div id="pfBox"></div>');
   function draw(d) {
-    var h = '<h3>' + esc(title) + '</h3><div class="seg"><button data-sp="mine" class="' + (cur.space === 'mine' ? 'on' : '') + '">📁 My Documents</button><button data-sp="shared" class="' + (cur.space === 'shared' ? 'on' : '') + '">🗂️ Kho chung</button></div>';
+    var h = '<h3>' + esc(title) + '</h3>' + (KHO ? '' : '<div class="seg"><button data-sp="mine" class="' + (cur.space === 'mine' ? 'on' : '') + '">📁 My Documents</button><button data-sp="shared" class="' + (cur.space === 'shared' ? 'on' : '') + '">🗂️ Kho chung</button></div>');
     h += '<div class="crumb" style="margin:8px 0"><button data-pf="0">Gốc</button>' + (d ? d.path.map(function (x) { return ' <span>›</span> <button data-pf="' + x.id + '">' + esc(x.name) + '</button>'; }).join('') : '') + '</div>';
     h += '<div style="max-height:38vh;overflow:auto">' + (d ? (d.items.filter(function (x) { return x.kind === 'folder'; }).map(function (x) { return '<button class="drow" data-pf="' + x.id + '"><span class="di">📂</span><span class="dm"><span class="dn">' + esc(x.name) + '</span></span></button>'; }).join('') || '<div class="empty" style="padding:12px">Không có thư mục con</div>') : '<div class="empty">Đang tải…</div>') + '</div>';
     h += '<button class="btn block" id="pfOk" style="margin-top:10px">✓ Chọn thư mục này</button>';
@@ -2455,7 +2518,7 @@ function docOp(a, ids) {
 function putPart(s, n, blob, onp) {
   return new Promise(function (res, rej) {
     var x = new XMLHttpRequest();
-    x.open('POST', API + '/api/docs/part?key=' + encodeURIComponent(s.key) + '&uploadId=' + encodeURIComponent(s.uploadId) + '&n=' + n);
+    x.open('POST', API + (KHO ? '/api/kho/part' : '/api/docs/part') + '?key=' + encodeURIComponent(s.key) + '&uploadId=' + encodeURIComponent(s.uploadId) + '&n=' + n);
     x.setRequestHeader('Authorization', 'Bearer ' + token); x.setRequestHeader('Content-Type', 'application/octet-stream');
     x.upload.onprogress = function (e) { if (e.lengthComputable) onp(e.loaded); };
     x.onload = function () { var d = {}; try { d = JSON.parse(x.responseText); } catch (e) {} if (x.status >= 200 && x.status < 300) res(d); else rej(new Error(d.error || ('Lỗi ' + x.status))); };
@@ -2502,7 +2565,7 @@ function docSheet(id) {
     (isF ? '<button class="act" data-a="open"><span class="e">📂</span>Mở thư mục</button>' : '<button class="act" data-a="dl"><span class="e">⬇️</span>Tải về / mở</button>') +
     (it.can_del ? '<button class="act" data-a="ren"><span class="e">✏️</span>Đổi tên</button><button class="act" data-a="mv"><span class="e">📦</span>Di chuyển tới…</button>' : '') +
     '<button class="act" data-a="cp"><span class="e">📑</span>Sao chép tới…</button>' +
-    (!isF && it.size <= MAX_FILE ? '<button class="act" data-a="send"><span class="e">💬</span>Gửi vào cuộc trò chuyện…</button>' : '') +
+    (!KHO && !isF && it.size <= MAX_FILE ? '<button class="act" data-a="send"><span class="e">💬</span>Gửi vào cuộc trò chuyện…</button>' : '') +
     (!isF && navigator.share ? '<button class="act" data-a="share"><span class="e">📤</span>Chia sẻ ra app khác</button>' : '') +
     (it.can_del ? '<button class="act red" data-a="del"><span class="e">🗑️</span>Xóa</button>' : '') +
     '<button class="act" data-a="x" style="justify-content:center;color:var(--muted)">Đóng</button>');

@@ -2,7 +2,7 @@
    - Lưu sẵn giao diện để mở app nhanh
    - Nhận nội dung "Chia sẻ" từ app khác trên Android (share target)
    - Thông báo đẩy (Web Push): hiện thông báo, bấm vào thì mở đúng cuộc trò chuyện */
-var CACHE = 'nha-shell-v4';
+var CACHE = 'nha-shell-v5';
 var SHELL = ['./', 'index.html', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 
 self.addEventListener('install', function (e) {
@@ -41,8 +41,9 @@ self.addEventListener('fetch', function (e) {
   if (req.method !== 'GET') return;
   if (req.mode === 'navigate' || /\/(index\.html)?$/.test(url.pathname)) {
     // Ưu tiên bản mới nhất trên mạng, mất mạng thì dùng bản đã lưu
+    var isRoot = url.pathname === '/' || url.pathname === '/index.html';
     e.respondWith(fetch(req).then(function (res) {
-      var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put('index.html', copy); });
+      if (isRoot) { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put('index.html', copy); }); }
       return res;
     }).catch(function () { return caches.match('index.html'); }));
     return;
