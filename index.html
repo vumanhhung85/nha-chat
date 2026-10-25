@@ -65,6 +65,8 @@ a{color:#1F6FD1}
 .kho-mode #meBar,.kho-mode #tabs,.kho-mode #main{display:none!important}
 .kho-mode .side{width:100%;flex:1 1 auto;max-width:760px;margin:0 auto;border-right:0}
 .khohd{display:flex;align-items:center;justify-content:space-between;font-size:20px;margin-bottom:6px}
+.dropov{position:fixed;inset:0;z-index:9999;background:rgba(242,118,90,.88);color:#fff;align-items:center;justify-content:center;text-align:center;font-size:22px;border:4px dashed #fff;border-radius:18px;margin:8px;pointer-events:none}
+.ing-b{font-size:14px;margin:8px 0;word-break:break-word}
 .dup{background:var(--panel);border-radius:14px;padding:10px 12px;margin-bottom:8px;font-size:14px;box-shadow:0 1px 6px rgba(80,40,20,.06)}
 .dup .pb{height:6px;background:#F3EAE4;border-radius:4px;overflow:hidden;margin-top:6px}.dup .pb i{display:block;height:100%;width:0;background:var(--brand)}
 
@@ -430,7 +432,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.7.0';
+var VERSION = '1.8.0';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -1567,7 +1569,7 @@ function addFiles(files, forceKind) {
   files.forEach(function (f) {
     if (S.pending.length >= MAX_ATTS) { toast('Tối đa ' + MAX_ATTS + ' tệp mỗi lần gửi', true); return; }
     var isImg = !forceKind && /^image\//.test(f.type) && !/svg|gif/.test(f.type);
-    if (!isImg && f.size > MAX_FILE) { toast('"' + f.name + '" quá lớn (tối đa 25MB)', true); return; }
+    if (!isImg && f.size > MAX_FILE) { toast('"' + f.name + '" quá lớn (tối đa 25MB) — hãy gửi qua Kho', true); return; }
     var p = { pid: ++pid, file: f, name: f.name || 'tep', kind: isImg ? 'image' : (/^video\//.test(f.type) && !forceKind ? 'video' : (/^image\/gif/.test(f.type) && !forceKind ? 'image' : 'file')), prog: 0, status: 'prep', preview: null, attId: null };
     S.pending.push(p);
     (isImg ? compressImage(f) : Promise.resolve(null)).then(function (r) {
@@ -2529,8 +2531,8 @@ function putPart(s, n, blob, onp) {
 function putPartRetry(s, n, blob, onp, left) {
   return putPart(s, n, blob, onp).catch(function (e) { if (left > 0 && !/^Lỗi 4/.test(e.message)) return new Promise(function (r) { setTimeout(r, 1200); }).then(function () { return putPartRetry(s, n, blob, onp, left - 1); }); throw e; });
 }
-function docUpload(space, parent, file, onProg) {
-  var name = file.name || 'tep', mime = file.type || 'application/octet-stream';
+function docUpload(space, parent, file, onProg, nameOverride) {
+  var name = nameOverride || file.name || 'tep', mime = file.type || 'application/octet-stream';
   return api('/api/docs/start', { body: { space: space, parent: parent, name: name, size: file.size, mime: mime } }).then(function (s) {
     var parts = [], done = 0, n = 0, total = file.size, chunk = s.chunk || 8388608;
     function next() {
@@ -2542,21 +2544,117 @@ function docUpload(space, parent, file, onProg) {
   });
 }
 var upId = 0;
+/* Tải lên nhiều tệp (nút chọn tệp, kéo thả, nhận chia sẻ): kiểm tra cỡ tệp, dung lượng, trùng tên rồi mới tải */
 function docsUploadMany(space, parent, files) {
-  var st = S.docs;
-  return files.reduce(function (chain, f) {
-    return chain.then(function () {
-      var u = { id: ++upId, name: f.name || 'tep', p: 0 }; st.up.push(u);
-      if (S.tab === 'docs') renderDocsTab();
-      return docUpload(space, parent, f, function (p) {
-        u.p = p; var el = S.tab === 'docs' && $('[data-u="' + u.id + '"]');
-        if (el) { el.querySelector('i').style.width = Math.round(p * 100) + '%'; el.querySelector('span').textContent = Math.round(p * 100) + '%'; }
-      }).then(function () { st.up = st.up.filter(function (x) { return x !== u; }); }, function (e) {
-        u.err = e.message; toast('"' + u.name + '": ' + e.message, true);
-        setTimeout(function () { st.up = st.up.filter(function (x) { return x !== u; }); if (S.tab === 'docs') renderDocsTab(); }, 5000);
+  return docsIngest(files.map(function (f) { return { file: f, path: [] }; }), space, parent);
+}
+function listDir(space, parent) { return api('/api/docs?space=' + space + '&parent=' + parent).then(function (d) { return d.items; }); }
+function dirLookup(space, parent, names) {   // tìm thư mục theo đường dẫn, không tạo; null nếu chưa có
+  if (!names.length) return Promise.resolve(parent);
+  return listDir(space, parent).then(function (items) {
+    var f = items.filter(function (x) { return x.kind === 'folder' && x.name.toLowerCase() === names[0].toLowerCase(); })[0];
+    return f ? dirLookup(space, f.id, names.slice(1)) : null;
+  });
+}
+function dirEnsure(space, parent, names) {   // tìm hoặc tạo
+  if (!names.length) return Promise.resolve(parent);
+  return listDir(space, parent).then(function (items) {
+    var f = items.filter(function (x) { return x.kind === 'folder' && x.name.toLowerCase() === names[0].toLowerCase(); })[0];
+    return f ? f.id : api('/api/docs/folder', { body: { space: space, parent: parent, name: names[0] } }).then(function (r) { return r.id; });
+  }).then(function (id) { return dirEnsure(space, id, names.slice(1)); });
+}
+function uniqueName(name, taken) {
+  var dot = name.lastIndexOf('.'), base = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '', n = 2, c = name;
+  while (taken[c.toLowerCase()]) c = base + ' (' + (n++) + ')' + ext;
+  return c;
+}
+function docsIngest(items, space, parent) {
+  var st = S.docs, here = function () { return st.data && st.data.space === space && st.data.parent === parent; };
+  return (here() ? Promise.resolve() : loadDocs()).then(function () {
+    var d = st.data, maxF = d ? d.max_file : 0, free = d ? d.quota - d.used : Infinity;
+    var over = [], empty = [], cand = [];
+    items.forEach(function (x) { if (!x.file.size) empty.push(x); else if (maxF && x.file.size > maxF) over.push(x); else cand.push(x); });
+    var dirCache = {}, listCache = {};
+    function dirKey(x) { return x.path.join('/'); }
+    // tìm sẵn thư mục đích (nếu đã có) để biết tệp nào trùng tên
+    var keys = []; cand.forEach(function (x) { var k = dirKey(x); if (keys.indexOf(k) < 0) keys.push(k); });
+    return keys.reduce(function (ch, k) {
+      return ch.then(function () {
+        var names = k ? k.split('/') : [];
+        return dirLookup(space, parent, names).then(function (id) { dirCache[k] = id; return id == null ? [] : (id === parent && here() ? Promise.resolve(d.items) : listDir(space, id)); })
+          .then(function (its) { var m = {}; its.forEach(function (it) { if (it.kind === 'file') m[it.name.toLowerCase()] = it; }); listCache[k] = m; });
+      });
+    }, Promise.resolve()).then(function () {
+      var dups = cand.filter(function (x) { return listCache[dirKey(x)][x.file.name.toLowerCase()]; });
+      var tooBig = [];   // vượt dung lượng còn trống
+      var total = 0, fit = [];
+      cand.forEach(function (x) {
+        var old = listCache[dirKey(x)][x.file.name.toLowerCase()];
+        if (total + x.file.size <= free + (old ? old.size : 0)) { total += x.file.size - 0; fit.push(x); } else tooBig.push(x);
+      });
+      var warn = over.length || tooBig.length || dups.length || empty.length;
+      var go = function (mode) { return docsRunJobs(space, parent, fit, dirCache, listCache, mode); };
+      if (!warn) return go('both');
+      if (!fit.length && !dups.length) {
+        var h0 = '<h3>⚠️ Không tải lên được</h3>' + warnLines(over, empty, tooBig, maxF, free);
+        var sh0 = openSheet(h0 + '<button class="btn block" id="ingOk">Đóng</button>'); $('#ingOk', sh0).onclick = closeSheet; return;
+      }
+      return new Promise(function (resolve) {
+        var mode = 'both';
+        var h = '<h3>' + (dups.length ? '📄 Có tệp trùng tên' : '⚠️ Lưu ý trước khi tải') + '</h3>' + warnLines(over, empty, tooBig, maxF, free);
+        if (dups.length) h += '<div class="ing-b"><b>Đã có trong thư mục (' + dups.length + '):</b> ' + dups.slice(0, 6).map(function (x) { return esc(x.file.name); }).join(', ') + (dups.length > 6 ? '…' : '') + '</div>' +
+          '<div class="seg" id="ingMode" style="margin:8px 0"><button data-m="both" class="on">Giữ cả hai</button><button data-m="over">Ghi đè</button><button data-m="skip">Bỏ qua</button></div>';
+        h += '<button class="btn block" id="ingGo">Tải lên ' + (fit.length - (dups.length && false ? 0 : 0)) + ' tệp</button><button class="act" style="justify-content:center;color:var(--muted)" id="ingNo">Hủy</button>';
+        var sh = openSheet(h);
+        $$('#ingMode button', sh).forEach(function (b) { b.onclick = function () { mode = b.getAttribute('data-m'); $$('#ingMode button', sh).forEach(function (x) { x.classList.toggle('on', x === b); }); }; });
+        $('#ingNo', sh).onclick = function () { closeSheet(); resolve(); };
+        $('#ingGo', sh).onclick = function () { closeSheet(); resolve(go(mode)); };
       });
     });
-  }, Promise.resolve()).then(function () { if (st.space === space && st.parent === parent) return loadDocs(); });
+  }).catch(function (e) { toast(e.message, true); });
+}
+function warnLines(over, empty, tooBig, maxF, free) {
+  var h = '';
+  function names(a) { return a.slice(0, 5).map(function (x) { return esc(x.file.name) + ' (' + fmtBig(x.file.size) + ')'; }).join(', ') + (a.length > 5 ? ' và ' + (a.length - 5) + ' tệp khác' : ''); }
+  if (over.length) h += '<div class="ing-b" style="color:var(--danger,#c0392b)">🚫 <b>Vượt giới hạn ' + fmtBig(maxF) + '/tệp — sẽ bỏ qua ' + over.length + ' tệp:</b> ' + names(over) + '</div>';
+  if (tooBig.length) h += '<div class="ing-b" style="color:var(--danger,#c0392b)">🚫 <b>Không đủ dung lượng (còn ' + fmtBig(Math.max(0, free)) + ') — bỏ qua ' + tooBig.length + ' tệp:</b> ' + names(tooBig) + '</div>';
+  if (empty.length) h += '<div class="ing-b">ℹ️ Bỏ qua ' + empty.length + ' tệp rỗng: ' + names(empty) + '</div>';
+  return h;
+}
+function docsRunJobs(space, parent, list, dirCache, listCache, mode) {
+  var st = S.docs, okN = 0;
+  var taken = {};   // tên đã dùng trong từng thư mục (để đặt "(2)")
+  var jobs = [];
+  return list.reduce(function (ch, x) {
+    return ch.then(function () {
+      var k = x.path.join('/');
+      var old = listCache[k][x.file.name.toLowerCase()];
+      if (old && mode === 'skip') return;
+      return (dirCache[k] != null ? Promise.resolve(dirCache[k]) : dirEnsure(space, parent, x.path).then(function (id) { dirCache[k] = id; return id; })).then(function (pid) {
+        var name = x.file.name, replace = null;
+        if (old && mode === 'over') replace = old.id;
+        else if (old) { var t = taken[pid] = taken[pid] || {}; Object.keys(listCache[k]).forEach(function (n) { t[n] = 1; }); name = uniqueName(name, t); t[name.toLowerCase()] = 1; }
+        jobs.push({ file: x.file, parent: pid, name: name, replace: replace });
+      });
+    });
+  }, Promise.resolve()).then(function () {
+    return jobs.reduce(function (chain, j) {
+      return chain.then(function () {
+        var u = { id: ++upId, name: j.name, p: 0 }; st.up.push(u);
+        if (S.tab === 'docs') renderDocsTab();
+        return docUpload(space, j.parent, j.file, function (p) {
+          u.p = p; var el = S.tab === 'docs' && $('[data-u="' + u.id + '"]');
+          if (el) { el.querySelector('i').style.width = Math.round(p * 100) + '%'; el.querySelector('span').textContent = Math.round(p * 100) + '%'; }
+        }, j.name).then(function () {
+          okN++; st.up = st.up.filter(function (x) { return x !== u; });
+          return j.replace ? api('/api/docs/delete', { body: { ids: [j.replace] } }).catch(function () {}) : null;
+        }, function (e) {
+          u.err = e.message; toast('"' + u.name + '": ' + e.message, true);
+          setTimeout(function () { st.up = st.up.filter(function (x) { return x !== u; }); if (S.tab === 'docs') renderDocsTab(); }, 5000);
+        });
+      });
+    }, Promise.resolve());
+  }).then(function () { if (okN) toast('Đã tải lên ' + okN + ' tệp'); if (st.space === space) return loadDocs(); });
 }
 function docSheet(id) {
   var d = S.docs.data; var it = d && d.items.filter(function (x) { return x.id === id; })[0]; if (!it) return;
@@ -2617,6 +2715,68 @@ function shareFiles(text, atts) {
     return navigator.share(data);
   }).catch(function (e) { if (e && e.name !== 'AbortError') toast('Không chia sẻ được', true); });
 }
+
+
+/* =========================================================
+   Kéo thả tệp (máy tính / iPad): vào chat → đính kèm; vào Kho → tải lên (cả thư mục)
+   ========================================================= */
+(function () {
+  var ov = document.createElement('div'); ov.id = 'dropOv'; ov.className = 'dropov'; ov.style.display = 'none'; document.body.appendChild(ov);
+  var depth = 0;
+  function hasFiles(e) { var t = e.dataTransfer && e.dataTransfer.types; if (!t) return false; for (var i = 0; i < t.length; i++) if (t[i] === 'Files') return true; return false; }
+  function where(e) {
+    if (!token || (!KHO && !S.me)) return null;
+    if (KHO) return { k: 'docs', label: 'Kho chung' };
+    var t = e.target && e.target.closest ? e.target : null;
+    var inMain = t && t.closest('#main'), inSide = t && t.closest('.side');
+    if (inMain && S.cur && !$('#scrMain').classList.contains('hidden')) return { k: 'chat', label: convName(curConv()) };
+    if (inSide && S.tab === 'docs') return { k: 'docs' };
+    if (S.tab === 'docs' && !S.cur) return { k: 'docs' };
+    if (S.cur) return { k: 'chat', label: convName(curConv()) };
+    return null;
+  }
+  function docsLabel() { var d = S.docs.data; var p = d && d.path && d.path.length ? d.path[d.path.length - 1].name : (S.docs.space === 'shared' ? 'Kho chung' : 'My Documents'); return p; }
+  function showOv(w) {
+    if (!w) { ov.style.display = 'none'; return; }
+    ov.innerHTML = '<div><div style="font-size:54px">' + (w.k === 'chat' ? '💬' : '📁') + '</div><b>' + (w.k === 'chat' ? 'Thả để gửi vào “' + esc(w.label || '') + '”' : 'Thả để tải lên “' + esc(w.label || docsLabel()) + '”') + '</b><div style="font-size:14px;opacity:.8;margin-top:6px">' + (w.k === 'chat' ? 'Ảnh, video, tệp (tối đa 25MB/tệp)' : 'Có thể thả cả thư mục') + '</div></div>';
+    ov.style.display = 'flex';
+  }
+  function walk(ents, path) {
+    return Promise.all(ents.map(function (en) {
+      if (en.isFile) return new Promise(function (res) { en.file(function (f) { res([{ file: f, path: path }]); }, function () { res([]); }); });
+      if (en.isDirectory) return readAll(en.createReader()).then(function (ch) { return walk(ch, path.concat(en.name)); });
+      return [];
+    })).then(function (a) { return [].concat.apply([], a); });
+  }
+  function readAll(rd) { return new Promise(function (res) { var all = []; (function next() { rd.readEntries(function (r) { if (!r.length) return res(all); all = all.concat(Array.prototype.slice.call(r)); next(); }, function () { res(all); }); })(); }); }
+  function readDrop(dt) {
+    var items = dt.items, ents = [];
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      for (var i = 0; i < items.length; i++) { if (items[i].kind !== 'file') continue; var en = items[i].webkitGetAsEntry(); if (en) ents.push(en); }
+      if (ents.length) return walk(ents, []);
+    }
+    return Promise.resolve(Array.prototype.slice.call(dt.files || []).map(function (f) { return { file: f, path: [] }; }));
+  }
+  document.addEventListener('dragenter', function (e) { if (!hasFiles(e)) return; e.preventDefault(); depth++; showOv(where(e)); });
+  document.addEventListener('dragover', function (e) { if (!hasFiles(e)) return; e.preventDefault(); var w = where(e); try { e.dataTransfer.dropEffect = w ? 'copy' : 'none'; } catch (x) {} showOv(w); });
+  document.addEventListener('dragleave', function (e) { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) ov.style.display = 'none'; });
+  document.addEventListener('drop', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; ov.style.display = 'none';
+    var w = where(e); if (!w) return;
+    readDrop(e.dataTransfer).then(function (list) {
+      if (!list.length) return;
+      if (w.k === 'chat') {
+        var files = list.map(function (x) { return x.file; });
+        var big = files.filter(function (f) { return f.size > MAX_FILE && !/^image\//.test(f.type); });
+        if (big.length) toast(big.length + ' tệp lớn hơn 25MB không gửi qua chat được (' + big.slice(0, 2).map(function (f) { return f.name; }).join(', ') + (big.length > 2 ? '…' : '') + ') — hãy tải vào Kho', true);
+        var okf = files.filter(function (f) { return big.indexOf(f) < 0; });
+        if (okf.length > MAX_ATTS - S.pending.length) toast('Mỗi lần gửi tối đa ' + MAX_ATTS + ' tệp, phần dư bị bỏ qua', true);
+        if (okf.length) addFiles(okf, null);
+      } else docsIngest(list, S.docs.space, S.docs.parent);
+    });
+  });
+})();
 
 /* =========================================================
    Nhận chia sẻ từ app khác (Android)
