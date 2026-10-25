@@ -329,6 +329,8 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 .act.red{color:var(--bad)}
 .toast{position:fixed;left:50%;top:calc(16px + var(--safe-t));transform:translateX(-50%);background:#2B2320;color:#fff;padding:10px 18px;border-radius:14px;z-index:90;font-size:15px;max-width:90%;box-shadow:0 6px 18px rgba(0,0,0,.25);animation:fade .2s}
 .toast.err{background:var(--bad)}
+#upBar{position:fixed;left:8px;right:8px;bottom:calc(8px + var(--safe-b,0px));z-index:85;background:#2B2320;color:#fff;border-radius:14px;padding:10px 14px;font-size:14px;box-shadow:0 6px 18px rgba(0,0,0,.3);display:none}
+#upBar.on{display:block}#upBar b{color:#FFD27A}
 
 /* lightbox xem ảnh */
 .lb{position:fixed;inset:0;background:#000;z-index:80;display:flex;flex-direction:column}
@@ -432,7 +434,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.8.0';
+var VERSION = '1.8.1';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -528,7 +530,34 @@ function api(path, opt) {
     }, function () { var e = new Error('Không kết nối được máy chủ. Kiểm tra mạng nhé.'); e.net = true; throw e; });
 }
 
+/* theo dõi tải lên đang chạy: hiện thanh nhắc "đừng thoát app", giữ màn hình sáng, cảnh báo khi rời trang */
+var upBusy = 0, upWake = null;
+function upTrack(d) {
+  upBusy = Math.max(0, upBusy + d);
+  var b = document.getElementById('upBar');
+  if (!b) { b = document.createElement('div'); b.id = 'upBar'; document.body.appendChild(b); }
+  if (upBusy) { b.innerHTML = '⏳ <b>Đang tải lên ' + upBusy + ' tệp</b> — đừng thoát app hay tắt màn hình, kẻo tải chưa xong'; b.className = 'on'; }
+  else b.className = '';
+  try {
+    if (upBusy && !upWake && navigator.wakeLock && navigator.wakeLock.request) navigator.wakeLock.request('screen').then(function (w) { upWake = w; w.addEventListener && w.addEventListener('release', function () { upWake = null; }); }, function () {});
+    if (!upBusy && upWake) { upWake.release(); upWake = null; }
+  } catch (e) {}
+}
+window.addEventListener('beforeunload', function (e) { if (upBusy) { e.preventDefault(); e.returnValue = ''; return ''; } });
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden && upBusy) {   // rời app giữa chừng → báo ngay để không tưởng là đã xong
+    try { if (window.Notification && Notification.permission === 'granted' && navigator.serviceWorker) navigator.serviceWorker.ready.then(function (r) { r.showNotification('⏳ Nhà Mình chưa tải xong', { body: 'Mở lại app để tiếp tục tải lên. Tệp chưa lên sẽ tự tải tiếp.', tag: 'up-pending', renotify: false }); }); } catch (e) {}
+  } else if (!document.hidden) {
+    try { if (navigator.serviceWorker) navigator.serviceWorker.ready.then(function (r) { r.getNotifications({ tag: 'up-pending' }).then(function (l) { l.forEach(function (n) { n.close(); }); }); }); } catch (e) {}
+    if (upBusy && !upWake) upTrack(0);
+  }
+});
+
 function uploadFile(file, meta, onProgress) {
+  upTrack(1);
+  return uploadFile0(file, meta, onProgress).then(function (d) { upTrack(-1); return d; }, function (e) { upTrack(-1); throw e; });
+}
+function uploadFile0(file, meta, onProgress) {
   return new Promise(function (resolve, reject) {
     var fd = new FormData();
     fd.append('file', file, meta.name || file.name || 'tep');
@@ -821,7 +850,9 @@ function enterMain() {
     renderMeBar(); setTab(S.tab);
     if (S.cur && S.convs[S.cur]) openConv(S.cur, true);
     startPoll();
+    var sharing = /[?&]share=1/.test(location.search);
     checkShare();
+    if (!sharing) pendResume();
     checkDeepLink();
     pushResync();
   }
@@ -2532,6 +2563,10 @@ function putPartRetry(s, n, blob, onp, left) {
   return putPart(s, n, blob, onp).catch(function (e) { if (left > 0 && !/^Lỗi 4/.test(e.message)) return new Promise(function (r) { setTimeout(r, 1200); }).then(function () { return putPartRetry(s, n, blob, onp, left - 1); }); throw e; });
 }
 function docUpload(space, parent, file, onProg, nameOverride) {
+  upTrack(1);
+  return docUpload0(space, parent, file, onProg, nameOverride).then(function (d) { upTrack(-1); return d; }, function (e) { upTrack(-1); throw e; });
+}
+function docUpload0(space, parent, file, onProg, nameOverride) {
   var name = nameOverride || file.name || 'tep', mime = file.type || 'application/octet-stream';
   return api('/api/docs/start', { body: { space: space, parent: parent, name: name, size: file.size, mime: mime } }).then(function (s) {
     var parts = [], done = 0, n = 0, total = file.size, chunk = s.chunk || 8388608;
@@ -2544,6 +2579,43 @@ function docUpload(space, parent, file, onProg, nameOverride) {
   });
 }
 var upId = 0;
+/* Tệp nhận từ app khác được giữ lại trong máy cho tới khi tải xong; lỡ thoát app thì lần mở sau tự tải tiếp */
+var PEND = 'nha-pending';
+function pendSave(space, files) {
+  if (!window.caches) return Promise.resolve(files);
+  return caches.delete(PEND).then(function () { return caches.open(PEND); }).then(function (c) {
+    var meta = { space: space, files: files.map(function (f, i) { f._pend = i; return { name: f.name, type: f.type }; }) };
+    return Promise.all(files.map(function (f, i) { return c.put('/_pend/f' + i, new Response(f)); })).then(function () { return c.put('/_pend/meta', new Response(JSON.stringify(meta))); });
+  }).then(function () { return files; }, function () { return files; });
+}
+function pendDone(file) {
+  if (!file || file._pend == null || !window.caches) return;
+  var i = file._pend; file._pend = null;
+  caches.open(PEND).then(function (c) { return c.delete('/_pend/f' + i).then(function () { return c.keys(); }); }).then(function (ks) {
+    if (!ks.some(function (k) { return /\/_pend\/f\d+$/.test(k.url); })) caches.delete(PEND);
+  }).catch(function () {});
+}
+function pendResume() {
+  if (!window.caches || KHO) return;
+  caches.has(PEND).then(function (has) {
+    if (!has) return;
+    return caches.open(PEND).then(function (c) {
+      return c.match('/_pend/meta').then(function (r) { return r ? r.json() : null; }).then(function (meta) {
+        if (!meta) return caches.delete(PEND);
+        return Promise.all(meta.files.map(function (f, i) {
+          return c.match('/_pend/f' + i).then(function (fr) { return fr ? fr.blob().then(function (b) { var x; try { x = new File([b], f.name, { type: f.type }); } catch (e) { x = b; x.name = f.name; } x._pend = i; return x; }) : null; });
+        })).then(function (files) {
+          files = files.filter(Boolean);
+          if (!files.length) return caches.delete(PEND);
+          var el = openSheet('<h3>⏳ Còn ' + files.length + ' tệp chưa tải xong</h3><div style="color:var(--muted);font-size:14px;margin-bottom:10px">Lần trước bạn thoát app khi đang tải. Tải tiếp vào ' + (meta.space === 'shared' ? 'Kho chung' : 'My Documents') + ' nhé?</div>' +
+            '<button class="btn block" id="pdGo">Tải tiếp</button><button class="act" style="justify-content:center;color:var(--muted)" id="pdNo">Bỏ các tệp này</button>');
+          $('#pdGo', el).onclick = function () { closeSheet(); S.docs.space = meta.space; S.docs.parent = 0; S.docs.data = null; setTab('docs'); loadDocs(); docsUploadMany(meta.space, 0, files); };
+          $('#pdNo', el).onclick = function () { closeSheet(); caches.delete(PEND); };
+        });
+      });
+    });
+  }).catch(function () {});
+}
 /* Tải lên nhiều tệp (nút chọn tệp, kéo thả, nhận chia sẻ): kiểm tra cỡ tệp, dung lượng, trùng tên rồi mới tải */
 function docsUploadMany(space, parent, files) {
   return docsIngest(files.map(function (f) { return { file: f, path: [] }; }), space, parent);
@@ -2574,6 +2646,7 @@ function docsIngest(items, space, parent) {
     var d = st.data, maxF = d ? d.max_file : 0, free = d ? d.quota - d.used : Infinity;
     var over = [], empty = [], cand = [];
     items.forEach(function (x) { if (!x.file.size) empty.push(x); else if (maxF && x.file.size > maxF) over.push(x); else cand.push(x); });
+    over.concat(empty).forEach(function (x) { pendDone(x.file); });
     var dirCache = {}, listCache = {};
     function dirKey(x) { return x.path.join('/'); }
     // tìm sẵn thư mục đích (nếu đã có) để biết tệp nào trùng tên
@@ -2590,7 +2663,7 @@ function docsIngest(items, space, parent) {
       var total = 0, fit = [];
       cand.forEach(function (x) {
         var old = listCache[dirKey(x)][x.file.name.toLowerCase()];
-        if (total + x.file.size <= free + (old ? old.size : 0)) { total += x.file.size - 0; fit.push(x); } else tooBig.push(x);
+        if (total + x.file.size <= free + (old ? old.size : 0)) { total += x.file.size - 0; fit.push(x); } else { tooBig.push(x); pendDone(x.file); }
       });
       var warn = over.length || tooBig.length || dups.length || empty.length;
       var go = function (mode) { return docsRunJobs(space, parent, fit, dirCache, listCache, mode); };
@@ -2607,7 +2680,7 @@ function docsIngest(items, space, parent) {
         h += '<button class="btn block" id="ingGo">Tải lên ' + (fit.length - (dups.length && false ? 0 : 0)) + ' tệp</button><button class="act" style="justify-content:center;color:var(--muted)" id="ingNo">Hủy</button>';
         var sh = openSheet(h);
         $$('#ingMode button', sh).forEach(function (b) { b.onclick = function () { mode = b.getAttribute('data-m'); $$('#ingMode button', sh).forEach(function (x) { x.classList.toggle('on', x === b); }); }; });
-        $('#ingNo', sh).onclick = function () { closeSheet(); resolve(); };
+        $('#ingNo', sh).onclick = function () { closeSheet(); fit.forEach(function (x) { pendDone(x.file); }); resolve(); };
         $('#ingGo', sh).onclick = function () { closeSheet(); resolve(go(mode)); };
       });
     });
@@ -2629,7 +2702,7 @@ function docsRunJobs(space, parent, list, dirCache, listCache, mode) {
     return ch.then(function () {
       var k = x.path.join('/');
       var old = listCache[k][x.file.name.toLowerCase()];
-      if (old && mode === 'skip') return;
+      if (old && mode === 'skip') { pendDone(x.file); return; }
       return (dirCache[k] != null ? Promise.resolve(dirCache[k]) : dirEnsure(space, parent, x.path).then(function (id) { dirCache[k] = id; return id; })).then(function (pid) {
         var name = x.file.name, replace = null;
         if (old && mode === 'over') replace = old.id;
@@ -2646,9 +2719,10 @@ function docsRunJobs(space, parent, list, dirCache, listCache, mode) {
           u.p = p; var el = S.tab === 'docs' && $('[data-u="' + u.id + '"]');
           if (el) { el.querySelector('i').style.width = Math.round(p * 100) + '%'; el.querySelector('span').textContent = Math.round(p * 100) + '%'; }
         }, j.name).then(function () {
-          okN++; st.up = st.up.filter(function (x) { return x !== u; });
+          pendDone(j.file); okN++; st.up = st.up.filter(function (x) { return x !== u; });
           return j.replace ? api('/api/docs/delete', { body: { ids: [j.replace] } }).catch(function () {}) : null;
         }, function (e) {
+          if (!e.net && !/Mất kết nối|Không kết nối/.test(e.message)) pendDone(j.file);
           u.err = e.message; toast('"' + u.name + '": ' + e.message, true);
           setTimeout(function () { st.up = st.up.filter(function (x) { return x !== u; }); if (S.tab === 'docs') renderDocsTab(); }, 5000);
         });
@@ -2801,7 +2875,7 @@ function checkShare() {
       (sh.files.length ? '<button class="act" data-doc="mine"><span class="e">📁</span>Lưu vào My Documents</button><button class="act" data-doc="shared"><span class="e">🗂️</span>Lưu vào Kho chung</button><div style="font-size:13px;color:var(--muted);padding:6px 8px">Hoặc gửi vào chat:</div>' : '') +
       sortedConvs().map(function (c) { return '<button class="conv" data-to="' + c.id + '">' + convAvatar(c, 'sm') + '<div class="mid"><span class="nm">' + esc(convName(c)) + '</span></div></button>'; }).join(''));
     $$('[data-doc]', el).forEach(function (b) {
-      b.onclick = function () { closeSheet(); S.docs.space = b.getAttribute('data-doc'); S.docs.parent = 0; S.docs.data = null; setTab('docs'); loadDocs(); docsUploadMany(S.docs.space, 0, sh.files); };
+      b.onclick = function () { closeSheet(); S.docs.space = b.getAttribute('data-doc'); S.docs.parent = 0; S.docs.data = null; setTab('docs'); loadDocs(); var sp = S.docs.space; pendSave(sp, sh.files).then(function (fs) { docsUploadMany(sp, 0, fs); }); };
     });
     $$('[data-to]', el).forEach(function (b) {
       b.onclick = function () {
