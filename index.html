@@ -434,7 +434,7 @@ video.vid{display:block;max-width:280px;width:100%;border-radius:12px;background
 (function () {
 'use strict';
 
-var VERSION = '1.8.1';
+var VERSION = '1.9.0';
 // Địa chỉ Worker (API). Đổi đúng địa chỉ workers.dev của tài khoản Cloudflare chứa app.
 var DEFAULT_API = 'https://nha-chat-api.congnghephuonglinh.workers.dev';
 
@@ -1856,6 +1856,7 @@ function renderSettings() {
       '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn" id="stTgLink">' + (m.tg ? '🔄 Kết nối lại' : '🔗 Kết nối Telegram') + '</button>' + (m.tg ? '<button class="btn grey" id="stTgOff">Ngắt kết nối</button>' : '') + '</div></div>';
   }
   h += pushCard();
+  h += diagCard();
   h += '<div class="card"><h3>🔒 Đổi mã PIN</h3><label class="field"><span>PIN hiện tại</span><input class="inp" id="stOld" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4"></label>' +
     '<label class="field"><span>PIN mới (4 số)</span><input class="inp" id="stNew" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4"></label><button class="btn block" id="stPin">Đổi PIN</button></div>';
   if (par) {
@@ -1874,7 +1875,7 @@ function renderSettings() {
   h += '<button class="btn danger block" id="stOut">🚪 Đăng xuất</button><div class="ver">Nhà Mình ' + VERSION + '</div></div>';
   $('#panel').innerHTML = h;
 
-  pushCardInit();
+  pushCardInit(); diagInit();
   $('#stAv').onclick = function () { avatarSheet(m.id, false); };
   $$('#stFs button').forEach(function (b) { b.onclick = function () { S.fs = b.getAttribute('data-v'); lsSet('nha_fs', S.fs); applyFs(); renderSettings(); }; });
   $('#stPin').onclick = function () {
@@ -2065,6 +2066,56 @@ function pushCard() {
   else if (!pushSupported()) h += 'Máy này chưa hỗ trợ thông báo khi tắt app. Vẫn nhận tin ngay khi đang mở app.';
   else h += 'Đang kiểm tra…';
   return h + '</div></div>';
+}
+
+/* ---- Chẩn đoán: vì sao cuộc gọi không đến khi tắt app ---- */
+function diagCard() {
+  return '<div class="card"><h3>🩺 Kiểm tra báo cuộc gọi</h3><div style="font-size:15px;color:var(--muted)">Dùng khi gọi mà máy bên kia không reo lúc đã tắt app.</div>' +
+    '<div id="stDiag" style="margin-top:8px"></div><div style="margin-top:10px"><button class="btn" id="stDiagGo">🔍 Kiểm tra máy này</button></div></div>';
+}
+function diagInit() { var b = $('#stDiagGo'); if (b) b.onclick = diagRun; }
+function diagRun() {
+  var el = $('#stDiag'), b = $('#stDiagGo'); if (!el) return;
+  b.disabled = true; el.innerHTML = 'Đang kiểm tra…';
+  var rows = [];
+  function row(ok, t, hint) { rows.push('<div style="padding:6px 0;border-bottom:1px solid var(--line,#eee)">' + (ok === null ? 'ℹ️' : ok ? '✅' : '❌') + ' <b>' + t + '</b>' + (hint ? '<div style="font-size:13px;color:var(--muted);margin-left:26px">' + hint + '</div>' : '') + '</div>'); }
+  var sup = pushSupported();
+  row(sup, 'Máy hỗ trợ thông báo khi tắt app', sup ? '' : (isIOS() ? 'iPad/iPhone cần iPadOS/iOS 16.4 trở lên và phải mở app từ biểu tượng ngoài màn hình chính. Máy cũ hơn không nhận được thông báo khi tắt app.' : 'Trình duyệt này không hỗ trợ.'));
+  if (!sup) { el.innerHTML = rows.join(''); b.disabled = false; return; }
+  var perm = Notification.permission;
+  row(perm === 'granted', 'Quyền thông báo: ' + (perm === 'granted' ? 'đã cho phép' : perm === 'denied' ? 'đang bị chặn' : 'chưa hỏi'), perm === 'granted' ? '' : 'Vào Cài đặt máy → Ứng dụng/Thông báo → Nhà Mình (hoặc Chrome) để bật; hoặc bấm "Bật thông báo" ở thẻ trên.');
+  if (isIOS()) row(isStandalone(), 'Đang mở từ biểu tượng ngoài màn hình chính', isStandalone() ? '' : 'Phải mở app từ biểu tượng đã Thêm vào MH chính.');
+  else row(isStandalone() ? true : null, isStandalone() ? 'Đã cài app (mở như app riêng)' : 'Đang mở trong trình duyệt', isStandalone() ? '' : 'Nên bấm "Cài app lên máy" để hệ thống coi như app riêng, ít bị tắt ngầm hơn.');
+  pushGetSub().then(function (sub) {
+    row(!!sub, 'Máy này đã có đăng ký nhận push', sub ? '' : 'Bấm "Bật thông báo" ở thẻ phía trên.');
+    var ep = sub ? sub.endpoint : '';
+    return api('/api/push/status?endpoint=' + encodeURIComponent(ep)).then(function (st) {
+      row(st.registered, 'Máy chủ đã nhận đăng ký của máy này', st.registered ? '' : 'Thoát ra vào lại app, hoặc tắt rồi bật lại thông báo.');
+      row(st.devices.length ? null : false, 'Số máy của bạn đã đăng ký: ' + st.devices.length, st.devices.map(function (d) { return esc((d.here ? '👉 ' : '') + (d.ua || 'không rõ')); }).join('<br>'));
+      var h = rows.join('');
+      h += '<div style="margin:12px 0 6px;font-size:14px"><b>Thử thật:</b> bấm nút, rồi <b>vuốt tắt hẳn app và khóa màn hình</b>. Sau 10 giây máy phải reo/rung như cuộc gọi.</div>' +
+        (st.registered ? '<button class="btn" id="dgTest">📞 Gửi cuộc gọi thử tới máy này (10 giây)</button>' : '<div style="color:var(--bad);font-size:14px">Máy này chưa đăng ký nhận push nên chưa thử được — sửa các mục ❌ ở trên trước.</div>');
+      if (st.others) {
+        h += '<div style="margin:14px 0 6px;font-size:14px"><b>Thử máy người khác:</b></div>' + S.memberList.filter(function (x) { return x.id !== S.me; }).map(function (x) {
+          var n = st.others[x.id] || 0;
+          return '<div class="row">' + avatar(x.id, 'sm') + '<div class="f"><b>' + esc(x.name) + '</b><small>' + (n ? n + ' máy đã đăng ký' : '❌ chưa có máy nào đăng ký — sẽ không nhận được') + '</small></div>' + (n ? '<button class="btn grey" style="min-height:38px;padding:0 14px" data-dgm="' + x.id + '">Gọi thử</button>' : '') + '</div>';
+        }).join('');
+      }
+      h += '<div style="margin:14px 0 4px;font-size:14px"><b>Nếu thử mà máy vẫn im:</b></div><div style="font-size:13px;color:var(--muted)">' +
+        '• Samsung: Cài đặt → Ứng dụng → Chrome (hoặc Nhà Mình) → Pin → <b>Không hạn chế</b>.<br>' +
+        '• Cài đặt → Ứng dụng → Chrome → Thông báo: bật, mức <b>Khẩn cấp/Cao</b>, bật âm thanh.<br>' +
+        '• Tắt <b>Không làm phiền</b>; cho phép thông báo ở màn hình khóa.<br>' +
+        '• Cài đặt → Chăm sóc thiết bị → Pin → Giới hạn dùng nền: bỏ Nhà Mình/Chrome khỏi danh sách "ứng dụng ngủ".</div>';
+      el.innerHTML = h; b.disabled = false;
+      var t = $('#dgTest'); if (t) t.onclick = function () { diagSend({ endpoint: ep, delay: 10 }, t); };
+      $$('[data-dgm]', el).forEach(function (x) { x.onclick = function () { diagSend({ member: x.getAttribute('data-dgm'), delay: 10 }, x); }; });
+    });
+  }).catch(function (e) { el.innerHTML = rows.join('') + '<div style="color:var(--bad)">' + esc(e.message) + '</div>'; b.disabled = false; });
+}
+function diagSend(body, btn) {
+  btn.disabled = true;
+  api('/api/push/test', { body: body }).then(function (r) { toast('Đã hẹn gửi tới ' + r.devices + ' máy sau ' + r.delay + ' giây — hãy khóa màn hình và chờ'); })
+    .catch(function (e) { toast(e.message, true); }).then(function () { setTimeout(function () { btn.disabled = false; }, 12000); });
 }
 function pushCardInit() {
   var el = $('#stPush'); if (!el || !pushSupported()) return;
